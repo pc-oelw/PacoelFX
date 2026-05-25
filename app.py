@@ -13,12 +13,21 @@ except Exception:
     LIBROSA_OK = False
 
 
+# -------------------------
+# Page config
+# -------------------------
 st.set_page_config(
-    page_title="Pacoel Wave",
+    page_title="Pacoel Wave v8BIT-FIX",
     page_icon="🎮",
     layout="wide"
 )
 
+APP_VERSION = "v8BIT-FIX-002"
+
+
+# -------------------------
+# CSS
+# -------------------------
 st.markdown("""
 <style>
 html, body, [class*="css"] {
@@ -76,22 +85,26 @@ div[data-testid="stMarkdownContainer"] {
 </style>
 """, unsafe_allow_html=True)
 
+
+# -------------------------
+# Header
+# -------------------------
 st.markdown(
-    '<div class="main-title">🎮 Pacoel Wave</div>',
+    '<div class="main-title">🎮 Pacoel Wave v8BIT-FIX</div>',
     unsafe_allow_html=True
 )
 
 st.markdown(
-    '<div class="sub-title">Clean 8-Bit Remix Converter</div>',
+    '<div class="sub-title">Clearly Audible 8-Bit Remix Converter</div>',
     unsafe_allow_html=True
 )
 
 st.markdown("""
 <div class="info-box">
 
-This version does not simply destroy the audio quality.
-It keeps the original song recognizable, adds clean 8-bit synth layers,
-retro bass, arcade drums, and only a small amount of digital texture.
+이번 버전은 원곡을 너무 그대로 두지 않도록 바꿨어.
+원곡 볼륨을 낮추고, 8-bit 사각파 멜로디, 베이스, 아케이드 드럼을 더 크게 얹어서
+결과가 확실히 달라지게 만든 버전이야.
 
 </div>
 """, unsafe_allow_html=True)
@@ -100,6 +113,13 @@ retro bass, arcade drums, and only a small amount of digital texture.
 # -------------------------
 # Session state
 # -------------------------
+if "app_version" not in st.session_state:
+    st.session_state.app_version = APP_VERSION
+
+if st.session_state.app_version != APP_VERSION:
+    st.session_state.clear()
+    st.session_state.app_version = APP_VERSION
+
 if "converted_bytes" not in st.session_state:
     st.session_state.converted_bytes = None
 
@@ -111,7 +131,7 @@ if "convert_info" not in st.session_state:
 
 
 # -------------------------
-# Basic helpers
+# Audio helpers
 # -------------------------
 SAMPLE_RATE = 22050
 
@@ -126,7 +146,7 @@ def match_audio(layer, target):
 
 def analyze_bpm(file_path):
     if not LIBROSA_OK:
-        return 120
+        return 128
 
     try:
         y, sr = librosa.load(
@@ -146,18 +166,15 @@ def analyze_bpm(file_path):
             bpm = float(tempo)
 
         if bpm <= 0 or np.isnan(bpm):
-            bpm = 120
+            bpm = 128
 
         return int(bpm)
 
     except Exception:
-        return 120
+        return 128
 
 
-# -------------------------
-# Synth generators
-# -------------------------
-def square_wave(freq, duration_ms, volume_db=-18):
+def square_wave(freq, duration_ms, volume_db=-12):
     duration = duration_ms / 1000
 
     t = np.linspace(
@@ -171,10 +188,7 @@ def square_wave(freq, duration_ms, volume_db=-18):
         np.sin(2 * np.pi * freq * t)
     )
 
-    # 너무 거칠지 않게 살짝 부드럽게
-    wave = wave * 0.25
-
-    samples = (wave * 32767).astype(np.int16)
+    samples = (wave * 0.35 * 32767).astype(np.int16)
 
     seg = AudioSegment(
         samples.tobytes(),
@@ -186,7 +200,7 @@ def square_wave(freq, duration_ms, volume_db=-18):
     return seg + volume_db
 
 
-def triangle_wave(freq, duration_ms, volume_db=-20):
+def triangle_wave(freq, duration_ms, volume_db=-14):
     duration = duration_ms / 1000
 
     t = np.linspace(
@@ -200,9 +214,7 @@ def triangle_wave(freq, duration_ms, volume_db=-20):
         2 * ((freq * t) % 1) - 1
     ) - 1
 
-    wave = wave * 0.22
-
-    samples = (wave * 32767).astype(np.int16)
+    samples = (wave * 0.30 * 32767).astype(np.int16)
 
     seg = AudioSegment(
         samples.tobytes(),
@@ -214,7 +226,7 @@ def triangle_wave(freq, duration_ms, volume_db=-20):
     return seg + volume_db
 
 
-def noise_hit(duration_ms=70, volume_db=-22):
+def noise_hit(duration_ms=70, volume_db=-18):
     samples = np.random.uniform(
         -1,
         1,
@@ -227,7 +239,7 @@ def noise_hit(duration_ms=70, volume_db=-22):
         len(samples)
     )
 
-    samples = samples * envelope * 0.22
+    samples = samples * envelope * 0.28
 
     samples = (samples * 32767).astype(np.int16)
 
@@ -241,13 +253,7 @@ def noise_hit(duration_ms=70, volume_db=-22):
     return seg + volume_db
 
 
-# -------------------------
-# Light retro texture
-# -------------------------
-def light_bit_texture(audio, amount=0.18):
-    """
-    음질을 박살내지 않고 살짝 디지털 질감만 추가.
-    """
+def light_retro_texture(audio):
     base = audio.set_sample_width(2)
 
     samples = np.array(
@@ -258,15 +264,13 @@ def light_bit_texture(audio, amount=0.18):
         samples = samples.reshape((-1, 2))
 
     max_amp = 32767.0
-
-    # 10-bit 정도라서 너무 깨지지 않음
-    levels = 2 ** 10
+    levels = 2 ** 9
 
     crushed = np.round(
         samples / max_amp * (levels / 2)
     ) / (levels / 2) * max_amp
 
-    mixed = samples * (1 - amount) + crushed * amount
+    mixed = samples * 0.70 + crushed * 0.30
 
     mixed = np.clip(
         mixed,
@@ -282,16 +286,6 @@ def light_bit_texture(audio, amount=0.18):
     )
 
 
-def retro_clean_eq(audio):
-    # 먹먹함 방지: 저음 뭉침만 살짝 제거, 고음은 많이 남김
-    result = audio.high_pass_filter(45)
-    result = result.low_pass_filter(15000)
-    return result
-
-
-# -------------------------
-# Music scale
-# -------------------------
 def get_scale(mode):
     if mode == "Cute":
         return [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 659.25]
@@ -306,29 +300,27 @@ def get_scale(mode):
 
 
 # -------------------------
-# Arrangement layers
+# 8-bit arrangement layers
 # -------------------------
 def add_chip_melody(audio, bpm, mode, strength):
     output = audio
 
     scale = get_scale(mode)
-
     beat_ms = int(60000 / max(80, bpm))
 
     if strength == "Light":
-        step = beat_ms * 2
-        volume = -24
-    elif strength == "Strong":
-        step = beat_ms // 2
-        volume = -18
-    else:
         step = beat_ms
-        volume = -21
+        volume = -18
+    elif strength == "Strong":
+        step = max(100, beat_ms // 2)
+        volume = -10
+    else:
+        step = max(120, int(beat_ms * 0.75))
+        volume = -14
 
     pos = 0
     index = 0
-
-    end_limit = len(output) - 600
+    end_limit = len(output) - 500
 
     while pos < end_limit:
         freq = scale[index % len(scale)]
@@ -336,13 +328,16 @@ def add_chip_melody(audio, bpm, mode, strength):
         if index % 8 in [3, 7]:
             freq *= 2
 
+        if index % 16 == 15:
+            freq *= 1.5
+
         note = square_wave(
             freq,
-            int(step * 0.65),
+            int(step * 0.70),
             volume_db=volume
         )
 
-        note = note.fade_out(45)
+        note = note.fade_out(35)
         note = match_audio(note, output)
 
         output = output.overlay(
@@ -367,15 +362,14 @@ def add_chip_bass(audio, bpm, mode, strength):
     beat_ms = int(60000 / max(80, bpm))
 
     if strength == "Light":
-        volume = -22
-    elif strength == "Strong":
-        volume = -15
-    else:
         volume = -18
+    elif strength == "Strong":
+        volume = -9
+    else:
+        volume = -13
 
     pos = 0
     count = 0
-
     end_limit = len(output) - beat_ms
 
     while pos < end_limit:
@@ -387,7 +381,7 @@ def add_chip_bass(audio, bpm, mode, strength):
             volume_db=volume
         )
 
-        bass = bass.fade_out(60)
+        bass = bass.fade_out(50)
         bass = match_audio(bass, output)
 
         output = output.overlay(
@@ -407,23 +401,23 @@ def add_arcade_drums(audio, bpm, strength):
     beat_ms = int(60000 / max(80, bpm))
 
     if strength == "Light":
-        kick_vol = -23
-        snare_vol = -26
-        hat_vol = -30
+        kick_vol = -18
+        snare_vol = -22
+        hat_vol = -27
     elif strength == "Strong":
-        kick_vol = -16
-        snare_vol = -20
-        hat_vol = -25
+        kick_vol = -8
+        snare_vol = -13
+        hat_vol = -19
     else:
-        kick_vol = -19
-        snare_vol = -23
-        hat_vol = -28
+        kick_vol = -12
+        snare_vol = -17
+        hat_vol = -23
 
     kick = square_wave(
         75,
         80,
         volume_db=kick_vol
-    ).fade_out(60)
+    ).fade_out(55)
 
     snare = noise_hit(
         80,
@@ -441,7 +435,6 @@ def add_arcade_drums(audio, bpm, strength):
 
     pos = 0
     beat_count = 0
-
     end_limit = len(output) - 900
 
     while pos < end_limit:
@@ -464,7 +457,7 @@ def add_arcade_drums(audio, bpm, strength):
 
         if strength == "Strong":
             output = output.overlay(
-                hat - 4,
+                hat - 3,
                 position=pos + beat_ms // 4
             )
 
@@ -477,48 +470,69 @@ def add_arcade_drums(audio, bpm, strength):
 # -------------------------
 # Main remix function
 # -------------------------
-def make_clean_8bit_remix(audio, bpm, mode, strength):
+def make_very_obvious_8bit_remix(audio, bpm, mode, strength):
     original = normalize(audio)
 
-    # 원곡은 너무 깨지지 않게 유지
-    base = original - 3
-    base = retro_clean_eq(base)
-    base = light_bit_texture(base, amount=0.16)
+    # 원곡을 확 낮춰서 8-bit 레이어가 잘 들리게 함
+    if strength == "Light":
+        base = original - 8
+    elif strength == "Strong":
+        base = original - 14
+    else:
+        base = original - 11
+
+    base = base.high_pass_filter(45)
+    base = base.low_pass_filter(14500)
+    base = light_retro_texture(base)
 
     total = len(base)
 
-    intro_len = int(total * 0.28)
+    intro_len = int(total * 0.25)
     build_len = int(total * 0.30)
 
     intro = base[:intro_len]
     build = base[intro_len:intro_len + build_len]
     drop = base[intro_len + build_len:]
 
-    # 초반: 멜로디만 약하게
+    # 초반부터 확실히 8-bit 멜로디
     intro = add_chip_melody(
+        intro,
+        bpm,
+        mode,
+        "Normal" if strength != "Light" else "Light"
+    )
+
+    intro = add_chip_bass(
         intro,
         bpm,
         mode,
         "Light"
     )
 
-    # 중간: 베이스 + 약한 드럼
+    # 중간부터 편곡감 증가
     build = add_chip_bass(
         build,
         bpm,
         mode,
-        strength
+        "Normal" if strength != "Light" else "Light"
+    )
+
+    build = add_chip_melody(
+        build,
+        bpm,
+        mode,
+        "Normal"
     )
 
     build = add_arcade_drums(
         build,
         bpm,
-        "Light" if strength == "Light" else "Normal"
+        "Normal"
     )
 
     build = build + 1
 
-    # 후반: 가장 8-bit 편곡 느낌
+    # 후반은 8-bit 레이어를 크게
     drop = add_chip_bass(
         drop,
         bpm,
@@ -539,16 +553,16 @@ def make_clean_8bit_remix(audio, bpm, mode, strength):
         "Strong" if strength != "Light" else "Normal"
     )
 
-    drop = drop + 2
+    drop = drop + 3
     drop = drop.fade_out(1000)
 
     pause = AudioSegment.silent(
-        duration=100
+        duration=80
     )
 
     remix = intro.append(
         build,
-        crossfade=200
+        crossfade=180
     )
 
     remix = remix.append(
@@ -558,10 +572,10 @@ def make_clean_8bit_remix(audio, bpm, mode, strength):
 
     remix = remix.append(
         drop,
-        crossfade=120
+        crossfade=100
     )
 
-    remix = remix.fade_in(120)
+    remix = remix.fade_in(100)
     remix = remix.fade_out(900)
 
     return normalize(remix)
@@ -589,18 +603,23 @@ mode = st.selectbox(
 )
 
 strength = st.selectbox(
-    "Remix Strength",
+    "8-Bit Amount",
     [
         "Light",
         "Normal",
         "Strong"
     ],
-    index=1
+    index=2
 )
 
 st.write(
-    "Light = 원곡 중심 / Normal = 추천 / Strong = 8-bit 편곡감 강하게"
+    "이번 버전은 Strong 기준으로 원곡보다 8-bit 레이어가 훨씬 잘 들리게 되어 있어."
 )
+
+if st.button("Reset Result"):
+    st.session_state.converted_bytes = None
+    st.session_state.convert_info = None
+    st.rerun()
 
 st.markdown("</div>", unsafe_allow_html=True)
 
@@ -612,16 +631,17 @@ if uploaded:
 
     st.audio(uploaded)
 
-    if st.button("Generate Clean 8-Bit Remix"):
+    if st.button("Generate Obvious 8-Bit Remix"):
         progress = st.progress(0)
         status = st.empty()
 
         steps = [
             "Uploading audio...",
             "Analyzing BPM...",
-            "Creating clean retro base...",
-            "Adding 8-bit melody layer...",
-            "Adding arcade bass and drums...",
+            "Lowering original track...",
+            "Adding 8-bit melody...",
+            "Adding chip bass...",
+            "Adding arcade drums...",
             "Finalizing remix..."
         ]
 
@@ -629,18 +649,20 @@ if uploaded:
             time.sleep(0.008)
             progress.progress(i)
 
-            if i < 15:
+            if i < 12:
                 status.write(steps[0])
-            elif i < 30:
+            elif i < 25:
                 status.write(steps[1])
-            elif i < 50:
+            elif i < 40:
                 status.write(steps[2])
-            elif i < 68:
+            elif i < 58:
                 status.write(steps[3])
-            elif i < 88:
+            elif i < 75:
                 status.write(steps[4])
-            else:
+            elif i < 90:
                 status.write(steps[5])
+            else:
+                status.write(steps[6])
 
         file_ext = os.path.splitext(uploaded.name)[1]
 
@@ -660,14 +682,14 @@ if uploaded:
             st.error("Audio is too short. Please upload a longer song.")
             st.stop()
 
-        remix = make_clean_8bit_remix(
+        remix = make_very_obvious_8bit_remix(
             audio,
             bpm,
             mode,
             strength
         )
 
-        output_path = "pacoel_clean_8bit_remix.mp3"
+        output_path = "pacoel_obvious_8bit_remix.mp3"
 
         remix.export(
             output_path,
@@ -677,10 +699,10 @@ if uploaded:
         with open(output_path, "rb") as f:
             st.session_state.converted_bytes = f.read()
 
-        st.session_state.convert_info = f"{mode} / {strength} / BPM {bpm}"
+        st.session_state.convert_info = f"{mode} / {strength} / BPM {bpm} / {APP_VERSION}"
 
     if st.session_state.converted_bytes:
-        st.success("Clean 8-Bit Remix Complete!")
+        st.success("Obvious 8-Bit Remix Complete!")
 
         st.write(f"Style: {st.session_state.convert_info}")
 
@@ -690,8 +712,8 @@ if uploaded:
         )
 
         st.download_button(
-            "⬇ Download Clean 8-Bit Remix",
+            "⬇ Download Obvious 8-Bit Remix",
             st.session_state.converted_bytes,
-            file_name="pacoel_clean_8bit_remix.mp3",
+            file_name="pacoel_obvious_8bit_remix.mp3",
             mime="audio/mpeg",
         )

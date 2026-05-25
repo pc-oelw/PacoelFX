@@ -1,0 +1,5 @@
+status.write("Separating Audio with AI...")
+
+vocals_path, instrumental_path = separate_audio(
+    temp_path
+)

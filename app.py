@@ -6,7 +6,6 @@ import numpy as np
 import tempfile
 import time
 import os
-import requests
 
 # -------------------------
 # 페이지 설정
@@ -16,17 +15,6 @@ st.set_page_config(
     page_icon="🎵",
     layout="wide"
 )
-
-# -------------------------
-# Hugging Face API
-# -------------------------
-HF_TOKEN = st.secrets["HF_TOKEN"]
-
-API_URL = "https://api-inference.huggingface.co/models/facebook/musicgen-small"
-
-headers = {
-    "Authorization": f"Bearer {HF_TOKEN}"
-}
 
 # -------------------------
 # CSS
@@ -102,7 +90,7 @@ st.markdown("""
 
 AI analyzes your uploaded song and automatically creates
 a dynamic remix with adaptive speed, beat detection,
-drop enhancement, and AI-generated music styling.
+drop enhancement, and intelligent drum layering.
 
 </div>
 """, unsafe_allow_html=True)
@@ -182,10 +170,10 @@ if uploaded:
         loading = [
             "Analyzing Audio...",
             "Detecting BPM...",
-            "Detecting Drops...",
-            "Generating AI Remix...",
+            "Detecting Energy...",
+            "Finding Drops...",
+            "Generating Remix...",
             "Adding AI Drums...",
-            "Enhancing Audio...",
             "Finalizing..."
         ]
 
@@ -204,13 +192,13 @@ if uploaded:
             elif i < 40:
                 status.write(loading[2])
 
-            elif i < 60:
+            elif i < 55:
                 status.write(loading[3])
 
-            elif i < 80:
+            elif i < 75:
                 status.write(loading[4])
 
-            elif i < 95:
+            elif i < 90:
                 status.write(loading[5])
 
             else:
@@ -226,13 +214,14 @@ if uploaded:
             temp_path = tmp.name
 
         # -------------------------
-        # AI BPM 분석
+        # librosa 분석
         # -------------------------
         y, sr = librosa.load(
             temp_path,
             sr=None
         )
 
+        # BPM 분석
         tempo, beats = librosa.beat.beat_track(
             y=y,
             sr=sr
@@ -249,6 +238,22 @@ if uploaded:
         rms = librosa.feature.rms(y=y)[0]
 
         energy = np.mean(rms)
+
+        # -------------------------
+        # 오디오 로드
+        # -------------------------
+        audio = AudioSegment.from_file(temp_path)
+
+        length = len(audio)
+
+        # -------------------------
+        # 구간 분리
+        # -------------------------
+        intro = audio[:length // 3]
+
+        middle = audio[length // 3:length // 3 * 2]
+
+        drop = audio[length // 3 * 2:]
 
         # -------------------------
         # AI 속도 계산
@@ -272,20 +277,7 @@ if uploaded:
             drop_speed = 1.06
 
         # -------------------------
-        # 오디오 로드
-        # -------------------------
-        audio = AudioSegment.from_file(temp_path)
-
-        length = len(audio)
-
-        intro = audio[:length // 3]
-
-        middle = audio[length // 3:length // 3 * 2]
-
-        drop = audio[length // 3 * 2:]
-
-        # -------------------------
-        # AI 속도 적용
+        # 속도 적용
         # -------------------------
         intro = speedup(
             intro,
@@ -301,6 +293,17 @@ if uploaded:
             drop,
             playback_speed=drop_speed
         )
+
+        # -------------------------
+        # 드랍 강화
+        # -------------------------
+        if energy > 0.05:
+
+            drop = drop + 5
+
+        else:
+
+            drop = drop + 2
 
         # -------------------------
         # AI 드럼 추가
@@ -324,17 +327,6 @@ if uploaded:
         )
 
         # -------------------------
-        # 드랍 강화
-        # -------------------------
-        if energy > 0.05:
-
-            drop = drop + 5
-
-        else:
-
-            drop = drop + 2
-
-        # -------------------------
         # 합치기
         # -------------------------
         remixed = intro.append(
@@ -346,35 +338,6 @@ if uploaded:
             drop,
             crossfade=350
         )
-
-        # -------------------------
-        # Hugging Face AI 요청
-        # -------------------------
-        try:
-
-            with open(temp_path, "rb") as f:
-
-                response = requests.post(
-                    API_URL,
-                    headers=headers,
-                    data=f
-                )
-
-            if response.status_code == 200:
-
-                st.success("AI Music Generation Connected!")
-
-            else:
-
-                st.warning(
-                    "AI generation API connected, but model may still be loading."
-                )
-
-        except Exception as e:
-
-            st.warning(
-                f"AI API Error: {e}"
-            )
 
         # -------------------------
         # 최종 볼륨

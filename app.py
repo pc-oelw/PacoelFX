@@ -22,7 +22,7 @@ st.set_page_config(
     layout="wide"
 )
 
-APP_VERSION = "CHROMA-CHIPTUNE-REBUILD-001"
+APP_VERSION = "CHIPTUNE-MUSICAL-003"
 SYNTH_SR = 44100
 
 
@@ -96,16 +96,16 @@ st.markdown(
 )
 
 st.markdown(
-    '<div class="sub-title">Full Song 8-Bit Rebuilder</div>',
+    '<div class="sub-title">Musical 8-Bit Re-Arrangement</div>',
     unsafe_allow_html=True
 )
 
 st.markdown("""
 <div class="info-box">
 
-이번 버전은 같은 멜로디를 반복하는 방식이 아니라,
-원곡 전체의 화음과 음 흐름을 분석해서 시간별로 8비트 리드, 코드, 베이스, 드럼을 다시 만드는 방식이야.
-원곡을 효과음처럼 덮는 게 아니라, 곡 구조를 따라가게 만드는 버전이야.
+이번 버전은 억지로 원곡 전체 음을 하나하나 따라가기보다,
+원곡의 BPM/키/에너지 흐름을 분석해서 더 자연스러운 8비트 편곡처럼 만들게 바꿨어.
+소리도 삑삑거리는 효과음 느낌을 줄이고, 부드러운 리드/베이스/아르페지오/칩 드럼으로 바꿨어.
 
 </div>
 """, unsafe_allow_html=True)
@@ -132,7 +132,7 @@ if "convert_info" not in st.session_state:
 
 
 # -------------------------
-# Basic helpers
+# Helpers
 # -------------------------
 NOTE_NAMES = [
     "C", "C#", "D", "D#", "E", "F",
@@ -144,39 +144,21 @@ def midi_to_freq(midi_note):
     return 440.0 * (2 ** ((midi_note - 69) / 12))
 
 
-def pc_to_midi_near(pc, previous=None, low=60, high=84):
-    candidates = []
+def safe_bpm(bpm):
+    if bpm <= 0 or np.isnan(bpm):
+        return 128
 
-    for octave in range(0, 10):
-        midi = pc + octave * 12
+    while bpm < 85:
+        bpm *= 2
 
-        if low <= midi <= high:
-            candidates.append(midi)
+    while bpm > 180:
+        bpm /= 2
 
-    if not candidates:
-        return 72 + pc
-
-    if previous is None:
-        center = (low + high) // 2
-        return min(candidates, key=lambda x: abs(x - center))
-
-    return min(candidates, key=lambda x: abs(x - previous))
-
-
-def pydub_to_np(audio):
-    audio = audio.set_frame_rate(SYNTH_SR)
-    audio = audio.set_channels(2)
-    audio = audio.set_sample_width(2)
-
-    samples = np.array(audio.get_array_of_samples()).astype(np.float32)
-    samples = samples.reshape((-1, 2))
-
-    return samples / 32768.0
+    return int(bpm)
 
 
 def np_to_pydub(samples):
     samples = np.clip(samples, -1.0, 1.0)
-
     int_samples = (samples * 32767).astype(np.int16)
 
     return AudioSegment(
@@ -187,44 +169,49 @@ def np_to_pydub(samples):
     )
 
 
-def make_wave_array(freq, duration_sec, wave_type="square", amp=0.25):
+def make_wave(freq, duration_sec, wave_type="soft_pulse", amp=0.25):
     length = max(1, int(SYNTH_SR * duration_sec))
-
     t = np.linspace(0, duration_sec, length, False)
 
-    if wave_type == "square":
-        wave = np.sign(np.sin(2 * np.pi * freq * t))
-
-    elif wave_type == "pulse":
+    if wave_type == "soft_pulse":
         raw = np.sin(2 * np.pi * freq * t)
-        wave = np.where(raw > 0.35, 1.0, -1.0)
+        wave = np.where(raw > 0.15, 1.0, -1.0)
+        wave = np.tanh(wave * 1.2)
 
     elif wave_type == "triangle":
         wave = 2 * np.abs(2 * ((freq * t) % 1) - 1) - 1
 
+    elif wave_type == "sine_chip":
+        wave = np.sin(2 * np.pi * freq * t)
+        wave = np.round(wave * 8) / 8
+
+    elif wave_type == "square":
+        wave = np.sign(np.sin(2 * np.pi * freq * t))
+
     else:
         wave = np.sin(2 * np.pi * freq * t)
 
-    attack = max(1, int(0.006 * SYNTH_SR))
-    release = max(1, int(0.035 * SYNTH_SR))
+    attack = max(1, int(0.008 * SYNTH_SR))
+    release = max(1, int(0.045 * SYNTH_SR))
 
     envelope = np.ones(length)
-
     envelope[:attack] = np.linspace(0, 1, attack)
     envelope[-release:] = np.linspace(1, 0, release)
 
     wave = wave * envelope * amp
-
-    stereo = np.column_stack([wave, wave])
-
-    return stereo
+    return np.column_stack([wave, wave])
 
 
-def add_wave(buffer, start_ms, duration_ms, freq, wave_type, amp):
+def add_wave(buffer, start_ms, duration_ms, midi, wave_type, amp):
     start = int(SYNTH_SR * start_ms / 1000)
-    duration_sec = max(0.03, duration_ms / 1000)
 
-    wave = make_wave_array(
+    if start >= len(buffer):
+        return
+
+    freq = midi_to_freq(midi)
+    duration_sec = max(0.04, duration_ms / 1000)
+
+    wave = make_wave(
         freq,
         duration_sec,
         wave_type=wave_type,
@@ -233,60 +220,256 @@ def add_wave(buffer, start_ms, duration_ms, freq, wave_type, amp):
 
     end = min(len(buffer), start + len(wave))
 
-    if start >= len(buffer) or end <= start:
-        return
-
-    buffer[start:end] += wave[:end - start]
+    if end > start:
+        buffer[start:end] += wave[:end - start]
 
 
-def add_noise_hit(buffer, start_ms, duration_ms=55, amp=0.12):
+def add_noise(buffer, start_ms, duration_ms=60, amp=0.08):
     start = int(SYNTH_SR * start_ms / 1000)
-    length = int(SYNTH_SR * duration_ms / 1000)
 
     if start >= len(buffer):
         return
 
+    length = int(SYNTH_SR * duration_ms / 1000)
     noise = np.random.uniform(-1, 1, length)
-    env = np.linspace(1, 0, length) ** 1.5
-
+    env = np.linspace(1, 0, length) ** 1.6
     noise = noise * env * amp
     stereo = np.column_stack([noise, noise])
 
     end = min(len(buffer), start + len(stereo))
 
-    buffer[start:end] += stereo[:end - start]
+    if end > start:
+        buffer[start:end] += stereo[:end - start]
 
 
-def add_kick(buffer, start_ms, amp=0.22):
+def add_kick(buffer, start_ms, amp=0.16):
     start = int(SYNTH_SR * start_ms / 1000)
-
-    duration_ms = 100
-    length = int(SYNTH_SR * duration_ms / 1000)
 
     if start >= len(buffer):
         return
 
-    freqs = np.linspace(125, 55, length)
+    duration_ms = 95
+    length = int(SYNTH_SR * duration_ms / 1000)
+
+    freqs = np.linspace(105, 48, length)
     phase = 2 * np.pi * np.cumsum(freqs) / SYNTH_SR
 
-    wave = np.sign(np.sin(phase))
-    env = np.linspace(1, 0, length) ** 2
+    wave = np.sin(phase)
+    wave = np.round(wave * 5) / 5
 
+    env = np.linspace(1, 0, length) ** 2
     wave = wave * env * amp
+
     stereo = np.column_stack([wave, wave])
 
     end = min(len(buffer), start + len(stereo))
 
-    buffer[start:end] += stereo[:end - start]
+    if end > start:
+        buffer[start:end] += stereo[:end - start]
+
+
+# -------------------------
+# Music theory helpers
+# -------------------------
+def get_scale_for_key(root, mode):
+    if mode == "minor":
+        intervals = [0, 2, 3, 5, 7, 8, 10]
+    else:
+        intervals = [0, 2, 4, 5, 7, 9, 11]
+
+    return [(root + i) % 12 for i in intervals]
+
+
+def pc_to_midi(pc, low=60, high=84, previous=None):
+    candidates = []
+
+    for octave in range(0, 9):
+        midi = pc + octave * 12
+
+        if low <= midi <= high:
+            candidates.append(midi)
+
+    if not candidates:
+        return low
+
+    if previous is None:
+        center = (low + high) // 2
+        return min(candidates, key=lambda x: abs(x - center))
+
+    return min(candidates, key=lambda x: abs(x - previous))
+
+
+def nearest_scale_pc(pc, scale):
+    best = pc
+    best_dist = 99
+
+    for scale_pc in scale:
+        dist = min(
+            abs(pc - scale_pc),
+            12 - abs(pc - scale_pc)
+        )
+
+        if dist < best_dist:
+            best = scale_pc
+            best_dist = dist
+
+    return best
+
+
+def chord_from_root(root_pc, scale, mode):
+    if mode == "minor":
+        third = (root_pc + 3) % 12
+    else:
+        third = (root_pc + 4) % 12
+
+    fifth = (root_pc + 7) % 12
+
+    third = nearest_scale_pc(third, scale)
+    fifth = nearest_scale_pc(fifth, scale)
+
+    return [root_pc, third, fifth]
 
 
 # -------------------------
 # Analysis
 # -------------------------
-def estimate_key_from_chroma(chroma):
-    if chroma is None or chroma.shape[1] == 0:
-        return "C major"
+def analyze_song(file_path):
+    if not LIBROSA_OK:
+        return {
+            "bpm": 128,
+            "key_root": 0,
+            "key_mode": "major",
+            "sections": []
+        }
 
+    y, sr = librosa.load(
+        file_path,
+        sr=22050,
+        mono=True
+    )
+
+    tempo, _ = librosa.beat.beat_track(
+        y=y,
+        sr=sr
+    )
+
+    try:
+        bpm = float(tempo[0])
+    except Exception:
+        bpm = float(tempo)
+
+    bpm = safe_bpm(bpm)
+
+    hop_length = 512
+
+    chroma = librosa.feature.chroma_cqt(
+        y=y,
+        sr=sr,
+        hop_length=hop_length
+    )
+
+    rms = librosa.feature.rms(
+        y=y,
+        hop_length=hop_length
+    )[0]
+
+    times = librosa.frames_to_time(
+        np.arange(chroma.shape[1]),
+        sr=sr,
+        hop_length=hop_length
+    ) * 1000
+
+    key_root, key_mode = estimate_key(
+        chroma
+    )
+
+    scale = get_scale_for_key(
+        key_root,
+        key_mode
+    )
+
+    beat_ms = int(60000 / bpm)
+    bar_ms = beat_ms * 4
+
+    total_ms = int(len(y) / sr * 1000)
+
+    sections = []
+    pos = 0
+    prev_lead = None
+
+    energy_floor = np.percentile(rms, 35)
+
+    while pos < total_ms:
+        end = min(total_ms, pos + bar_ms)
+
+        mask = (times >= pos) & (times < end)
+
+        if np.sum(mask) < 2:
+            pos += bar_ms
+            continue
+
+        chroma_slice = chroma[:, mask]
+        energy = float(np.mean(rms[mask]))
+
+        if energy < energy_floor * 0.55:
+            pos += bar_ms
+            continue
+
+        chroma_energy = np.mean(chroma_slice, axis=1)
+        ranked = list(np.argsort(chroma_energy)[::-1])
+
+        root_pc = nearest_scale_pc(int(ranked[0]), scale)
+
+        chord = chord_from_root(
+            root_pc,
+            scale,
+            key_mode
+        )
+
+        # lead는 가장 강한 음을 쓰되 키 안으로 보정
+        lead_pc = nearest_scale_pc(
+            int(ranked[0]),
+            scale
+        )
+
+        lead_midi = pc_to_midi(
+            lead_pc,
+            low=64,
+            high=88,
+            previous=prev_lead
+        )
+
+        prev_lead = lead_midi
+
+        bass_midi = pc_to_midi(
+            root_pc,
+            low=36,
+            high=48
+        )
+
+        sections.append(
+            {
+                "start": int(pos),
+                "duration": int(end - pos),
+                "root_pc": root_pc,
+                "chord": chord,
+                "lead": lead_midi,
+                "bass": bass_midi,
+                "energy": energy
+            }
+        )
+
+        pos += bar_ms
+
+    return {
+        "bpm": bpm,
+        "key_root": key_root,
+        "key_mode": key_mode,
+        "sections": sections
+    }
+
+
+def estimate_key(chroma):
     chroma_mean = np.mean(chroma, axis=1)
 
     major = [0, 2, 4, 5, 7, 9, 11]
@@ -310,328 +493,232 @@ def estimate_key_from_chroma(chroma):
             best_root = root
             best_mode = "minor"
 
-    return f"{NOTE_NAMES[best_root]} {best_mode}"
+    return best_root, best_mode
 
 
-def get_top_pitch_classes(chroma_slice, previous_pc=None):
-    energy = np.mean(chroma_slice, axis=1)
+# -------------------------
+# Arrangement
+# -------------------------
+def make_progression_if_empty(total_ms, bpm, key_root, key_mode):
+    scale = get_scale_for_key(key_root, key_mode)
+    beat_ms = int(60000 / bpm)
+    bar_ms = beat_ms * 4
 
-    if np.max(energy) <= 0:
-        return [0, 4, 7]
-
-    ranked = list(np.argsort(energy)[::-1])
-
-    chosen = []
-
-    for pc in ranked:
-        if len(chosen) >= 3:
-            break
-
-        if energy[pc] < np.max(energy) * 0.38:
-            continue
-
-        chosen.append(int(pc))
-
-    if len(chosen) == 0:
-        if previous_pc is not None:
-            chosen = [previous_pc]
-        else:
-            chosen = [0]
-
-    while len(chosen) < 3:
-        chosen.append(chosen[0])
-
-    return chosen[:3]
-
-
-def analyze_song(file_path, density):
-    if not LIBROSA_OK:
-        return 128, [], "Unknown"
-
-    y, sr = librosa.load(
-        file_path,
-        sr=22050,
-        mono=True
-    )
-
-    tempo, beats = librosa.beat.beat_track(
-        y=y,
-        sr=sr
-    )
-
-    try:
-        bpm = float(tempo[0])
-    except Exception:
-        bpm = float(tempo)
-
-    if bpm <= 0 or np.isnan(bpm):
-        bpm = 128
-
-    bpm = int(bpm)
-
-    chroma = librosa.feature.chroma_cqt(
-        y=y,
-        sr=sr,
-        hop_length=512
-    )
-
-    rms = librosa.feature.rms(
-        y=y,
-        hop_length=512
-    )[0]
-
-    frame_times = librosa.frames_to_time(
-        np.arange(chroma.shape[1]),
-        sr=sr,
-        hop_length=512
-    ) * 1000
-
-    key_name = estimate_key_from_chroma(
-        chroma
-    )
-
-    beat_ms = int(60000 / max(80, bpm))
-
-    if density == "Simple":
-        step_ms = beat_ms
-    elif density == "Detailed":
-        step_ms = max(90, beat_ms // 4)
-    else:
-        step_ms = max(120, beat_ms // 2)
-
-    total_ms = int(len(y) / sr * 1000)
-
-    events = []
-
-    previous_pc = None
-    previous_lead_midi = None
-
-    global_rms = np.percentile(rms, 40)
+    progression_degrees = [0, 5, 3, 4]
+    sections = []
 
     pos = 0
+    i = 0
 
     while pos < total_ms:
-        end_pos = min(total_ms, pos + step_ms)
+        root_pc = scale[progression_degrees[i % len(progression_degrees)] % len(scale)]
+        chord = chord_from_root(root_pc, scale, key_mode)
 
-        mask = (frame_times >= pos) & (frame_times < end_pos)
-
-        if np.sum(mask) == 0:
-            pos += step_ms
-            continue
-
-        section_rms = np.mean(rms[mask])
-
-        if section_rms < global_rms * 0.55:
-            pos += step_ms
-            continue
-
-        chroma_slice = chroma[:, mask]
-
-        pcs = get_top_pitch_classes(
-            chroma_slice,
-            previous_pc
-        )
-
-        lead_pc = pcs[0]
-        chord_pc_1 = pcs[1]
-        chord_pc_2 = pcs[2]
-
-        lead_midi = pc_to_midi_near(
-            lead_pc,
-            previous_lead_midi,
-            low=64,
-            high=88
-        )
-
-        chord_midi_1 = pc_to_midi_near(
-            chord_pc_1,
-            lead_midi,
-            low=60,
-            high=84
-        )
-
-        chord_midi_2 = pc_to_midi_near(
-            chord_pc_2,
-            lead_midi,
-            low=60,
-            high=84
-        )
-
-        bass_midi = pc_to_midi_near(
-            lead_pc,
-            None,
-            low=36,
-            high=48
-        )
-
-        events.append(
+        sections.append(
             {
-                "start": int(pos),
-                "duration": int(step_ms * 0.85),
-                "lead": int(lead_midi),
-                "chord1": int(chord_midi_1),
-                "chord2": int(chord_midi_2),
-                "bass": int(bass_midi),
-                "energy": float(section_rms)
+                "start": pos,
+                "duration": bar_ms,
+                "root_pc": root_pc,
+                "chord": chord,
+                "lead": pc_to_midi(root_pc, low=67, high=84),
+                "bass": pc_to_midi(root_pc, low=36, high=48),
+                "energy": 1.0
             }
         )
 
-        previous_pc = lead_pc
-        previous_lead_midi = lead_midi
+        pos += bar_ms
+        i += 1
 
-        pos += step_ms
-
-    # 같은 음이 너무 길게 반복되면 리듬감 있게 살짝 나눔
-    cleaned = []
-
-    for event in events:
-        if not cleaned:
-            cleaned.append(event)
-            continue
-
-        prev = cleaned[-1]
-        prev_end = prev["start"] + prev["duration"]
-
-        if (
-            event["lead"] == prev["lead"]
-            and event["start"] - prev_end < step_ms * 0.35
-            and prev["duration"] < step_ms * 2
-        ):
-            prev["duration"] = event["start"] + event["duration"] - prev["start"]
-        else:
-            cleaned.append(event)
-
-    return bpm, cleaned, key_name
+    return sections
 
 
-# -------------------------
-# Chiptune synthesis
-# -------------------------
-def synthesize_chiptune(original_audio, bpm, events, key_name, style, strength, guide):
+def synthesize_musical_chiptune(original_audio, analysis, style, strength, guide):
     total_ms = len(original_audio)
+    bpm = analysis["bpm"]
+    key_root = analysis["key_root"]
+    key_mode = analysis["key_mode"]
+    sections = analysis["sections"]
 
-    if len(events) < 8:
-        beat_ms = int(60000 / max(80, bpm))
-        events = []
-
-        pattern = [72, 76, 79, 76, 81, 79, 76, 72]
-
-        pos = 0
-        i = 0
-
-        while pos < total_ms:
-            midi = pattern[i % len(pattern)]
-
-            events.append(
-                {
-                    "start": pos,
-                    "duration": int(beat_ms * 0.85),
-                    "lead": midi,
-                    "chord1": midi + 4,
-                    "chord2": midi + 7,
-                    "bass": midi - 24,
-                    "energy": 1.0
-                }
-            )
-
-            pos += beat_ms
-            i += 1
+    if len(sections) < 2:
+        sections = make_progression_if_empty(
+            total_ms,
+            bpm,
+            key_root,
+            key_mode
+        )
 
     length_samples = int(SYNTH_SR * total_ms / 1000) + SYNTH_SR
     buffer = np.zeros((length_samples, 2), dtype=np.float32)
 
     if strength == "Light":
-        lead_amp = 0.16
-        chord_amp = 0.055
-        bass_amp = 0.12
-        drum_amp = 0.10
-        guide_db = -18
+        lead_amp = 0.11
+        chord_amp = 0.045
+        bass_amp = 0.10
+        arp_amp = 0.055
+        drum_amp = 0.08
 
     elif strength == "Strong":
-        lead_amp = 0.34
-        chord_amp = 0.12
-        bass_amp = 0.24
-        drum_amp = 0.22
-        guide_db = -26
-
-    else:
-        lead_amp = 0.24
-        chord_amp = 0.08
-        bass_amp = 0.18
+        lead_amp = 0.25
+        chord_amp = 0.10
+        bass_amp = 0.20
+        arp_amp = 0.12
         drum_amp = 0.16
-        guide_db = -22
-
-    if style == "Cute":
-        lead_wave = "pulse"
-        chord_wave = "triangle"
-
-    elif style == "Dark":
-        lead_wave = "square"
-        chord_wave = "pulse"
-
-    elif style == "Boss":
-        lead_wave = "square"
-        chord_wave = "square"
 
     else:
-        lead_wave = "square"
+        lead_amp = 0.17
+        chord_amp = 0.07
+        bass_amp = 0.15
+        arp_amp = 0.085
+        drum_amp = 0.12
+
+    if style == "Soft":
+        lead_wave = "sine_chip"
         chord_wave = "triangle"
+        bass_wave = "triangle"
 
-    # 원곡의 시간별 음을 그대로 따라가며 8비트 악기로 재구성
-    for event in events:
-        start = event["start"]
-        duration = event["duration"]
+    elif style == "Gameboy":
+        lead_wave = "soft_pulse"
+        chord_wave = "triangle"
+        bass_wave = "triangle"
 
-        lead_freq = midi_to_freq(event["lead"])
-        chord_freq_1 = midi_to_freq(event["chord1"])
-        chord_freq_2 = midi_to_freq(event["chord2"])
-        bass_freq = midi_to_freq(event["bass"])
+    elif style == "NES":
+        lead_wave = "square"
+        chord_wave = "soft_pulse"
+        bass_wave = "triangle"
 
-        add_wave(
-            buffer,
-            start,
-            duration,
-            lead_freq,
-            lead_wave,
-            lead_amp
-        )
+    else:
+        lead_wave = "soft_pulse"
+        chord_wave = "square"
+        bass_wave = "triangle"
 
-        if strength != "Light":
+    beat_ms = int(60000 / bpm)
+    step_ms = max(90, beat_ms // 2)
+
+    # -------------------------
+    # Chords and bass follow original harmony
+    # -------------------------
+    for section in sections:
+        start = section["start"]
+        duration = section["duration"]
+        chord = section["chord"]
+        bass = section["bass"]
+
+        # pad/chord
+        for pc in chord:
+            midi = pc_to_midi(pc, low=60, high=76)
             add_wave(
                 buffer,
                 start,
                 duration,
-                chord_freq_1,
+                midi,
                 chord_wave,
                 chord_amp
             )
 
-            add_wave(
-                buffer,
-                start,
-                duration,
-                chord_freq_2,
-                chord_wave,
-                chord_amp * 0.8
-            )
+        # bass pulse
+        pos = start
 
-        # 베이스는 매 이벤트마다 말고, 일정 간격 느낌으로
-        if start % int(60000 / max(80, bpm)) < 80:
+        while pos < start + duration:
             add_wave(
                 buffer,
-                start,
-                duration,
-                bass_freq,
-                "triangle",
+                pos,
+                int(beat_ms * 0.85),
+                bass,
+                bass_wave,
                 bass_amp
             )
 
-    # 칩튠 드럼
-    beat_ms = int(60000 / max(80, bpm))
+            pos += beat_ms
 
+    # -------------------------
+    # Lead melody: chord tones + motion, not random repeated sound
+    # -------------------------
+    phrase_index = 0
+
+    for section in sections:
+        start = section["start"]
+        duration = section["duration"]
+        chord = section["chord"]
+
+        chord_midis = [
+            pc_to_midi(pc, low=67, high=88)
+            for pc in chord
+        ]
+
+        if style == "Boss":
+            pattern = [0, 1, 2, 1, 2, 1, 0, 2]
+        elif style == "Cute":
+            pattern = [0, 1, 2, 1, 0, 2, 1, 2]
+        else:
+            pattern = [0, 1, 2, 1, 2, 0, 1, 2]
+
+        pos = start
+        note_i = 0
+
+        while pos < start + duration:
+            midi = chord_midis[
+                pattern[(note_i + phrase_index) % len(pattern)] % len(chord_midis)
+            ]
+
+            if note_i % 8 in [3, 7]:
+                midi += 12
+
+            if midi > 88:
+                midi -= 12
+
+            add_wave(
+                buffer,
+                pos,
+                int(step_ms * 0.72),
+                midi,
+                lead_wave,
+                lead_amp
+            )
+
+            pos += step_ms
+            note_i += 1
+
+        phrase_index += 1
+
+    # -------------------------
+    # Arpeggio
+    # -------------------------
+    if strength != "Light":
+        for section in sections:
+            start = section["start"]
+            duration = section["duration"]
+            chord = section["chord"]
+
+            chord_midis = [
+                pc_to_midi(pc, low=72, high=91)
+                for pc in chord
+            ]
+
+            pos = start
+            arp_i = 0
+            arp_step = max(80, beat_ms // 4)
+
+            while pos < start + duration:
+                midi = chord_midis[arp_i % len(chord_midis)]
+
+                add_wave(
+                    buffer,
+                    pos,
+                    int(arp_step * 0.55),
+                    midi,
+                    "soft_pulse",
+                    arp_amp
+                )
+
+                pos += arp_step
+                arp_i += 1
+
+    # -------------------------
+    # Drums
+    # -------------------------
     beat_count = 0
 
-    for pos in range(0, total_ms - 800, beat_ms):
+    for pos in range(0, total_ms - 1000, beat_ms):
         if beat_count % 2 == 0:
             add_kick(
                 buffer,
@@ -640,58 +727,60 @@ def synthesize_chiptune(original_audio, bpm, events, key_name, style, strength, 
             )
 
         if beat_count % 4 == 2:
-            add_noise_hit(
+            add_noise(
                 buffer,
                 pos,
                 duration_ms=75,
                 amp=drum_amp * 0.75
             )
 
-        add_noise_hit(
+        add_noise(
             buffer,
             pos + beat_ms // 2,
             duration_ms=30,
-            amp=drum_amp * 0.45
+            amp=drum_amp * 0.42
         )
 
         if strength == "Strong":
-            add_noise_hit(
+            add_noise(
                 buffer,
                 pos + beat_ms // 4,
                 duration_ms=25,
-                amp=drum_amp * 0.32
+                amp=drum_amp * 0.28
             )
 
         beat_count += 1
 
-    chiptune = np_to_pydub(buffer[:int(SYNTH_SR * total_ms / 1000)])
-    chiptune = normalize(chiptune)
+    result = np_to_pydub(
+        buffer[:int(SYNTH_SR * total_ms / 1000)]
+    )
 
-    # 원곡 가이드는 아주 작게만 섞어서 "원곡 느낌" 확인용
+    # 원곡 가이드
     if guide != "None":
         if guide == "Very Low":
-            guide_gain = guide_db
+            guide_gain = -24
         elif guide == "Low":
-            guide_gain = guide_db + 4
+            guide_gain = -18
         else:
-            guide_gain = guide_db + 8
+            guide_gain = -14
 
-        original = original_audio
-        original = original.high_pass_filter(90)
-        original = original.low_pass_filter(8500)
+        original = original_audio.high_pass_filter(80)
+        original = original.low_pass_filter(9000)
         original = original + guide_gain
         original = original.set_frame_rate(SYNTH_SR).set_channels(2)
 
-        chiptune = chiptune.overlay(
+        result = result.overlay(
             original,
             position=0
         )
 
-    chiptune = normalize(chiptune)
-    chiptune = chiptune.fade_in(120)
-    chiptune = chiptune.fade_out(900)
+    result = normalize(result)
+    result = result.fade_in(120)
+    result = result.fade_out(900)
 
-    return chiptune, len(events), key_name
+    key_name = f"{NOTE_NAMES[key_root]} {key_mode}"
+
+    return result, key_name, bpm, len(sections)
 
 
 # -------------------------
@@ -705,32 +794,22 @@ uploaded = st.file_uploader(
 st.markdown('<div class="control-box">', unsafe_allow_html=True)
 
 style = st.selectbox(
-    "8-Bit Style",
+    "Chip Sound",
     [
-        "Arcade",
-        "Cute",
-        "Dark",
+        "Soft",
+        "Gameboy",
+        "NES",
         "Boss"
-    ],
-    index=0
-)
-
-strength = st.selectbox(
-    "Rebuild Strength",
-    [
-        "Light",
-        "Normal",
-        "Strong"
     ],
     index=1
 )
 
-density = st.selectbox(
-    "Note Detail",
+strength = st.selectbox(
+    "Arrangement Strength",
     [
-        "Simple",
+        "Light",
         "Normal",
-        "Detailed"
+        "Strong"
     ],
     index=1
 )
@@ -747,7 +826,7 @@ guide = st.selectbox(
 )
 
 st.write(
-    "Detailed = 원곡 음 변화 더 많이 따라감 / Simple = 더 단순한 게임음악 느낌"
+    "이 버전은 원곡에서 화음 흐름을 뽑아서 그 코드 진행 위에 8비트 리드/베이스/아르페지오를 다시 만드는 방식이야."
 )
 
 if st.button("Reset Result"):
@@ -766,18 +845,18 @@ if uploaded:
 
     st.audio(uploaded)
 
-    if st.button("Rebuild Whole Song as 8-Bit"):
+    if st.button("Rebuild as Musical 8-Bit"):
         progress = st.progress(0)
         status = st.empty()
 
         steps = [
             "Uploading audio...",
-            "Analyzing whole song harmony...",
-            "Extracting time-based notes...",
-            "Rebuilding lead as 8-bit...",
-            "Rebuilding chords and bass...",
-            "Adding chiptune drums...",
-            "Finalizing 8-bit song..."
+            "Analyzing BPM...",
+            "Detecting harmony flow...",
+            "Creating 8-bit chord progression...",
+            "Creating melodic chip lead...",
+            "Adding bass and drums...",
+            "Finalizing 8-bit arrangement..."
         ]
 
         for i in range(101):
@@ -786,13 +865,13 @@ if uploaded:
 
             if i < 10:
                 status.write(steps[0])
-            elif i < 25:
+            elif i < 24:
                 status.write(steps[1])
             elif i < 42:
                 status.write(steps[2])
-            elif i < 60:
+            elif i < 58:
                 status.write(steps[3])
-            elif i < 76:
+            elif i < 75:
                 status.write(steps[4])
             elif i < 90:
                 status.write(steps[5])
@@ -817,22 +896,19 @@ if uploaded:
             st.error("Audio is too short. Please upload a longer song.")
             st.stop()
 
-        bpm, events, key_name = analyze_song(
-            temp_path,
-            density
+        analysis = analyze_song(
+            temp_path
         )
 
-        rebuilt, event_count, detected_key = synthesize_chiptune(
+        rebuilt, key_name, bpm, section_count = synthesize_musical_chiptune(
             original_audio,
-            bpm,
-            events,
-            key_name,
+            analysis,
             style,
             strength,
             guide
         )
 
-        output_path = "pacoel_full_8bit_rebuild.mp3"
+        output_path = "pacoel_musical_8bit_arrangement.mp3"
 
         rebuilt.export(
             output_path,
@@ -843,12 +919,11 @@ if uploaded:
             st.session_state.converted_bytes = f.read()
 
         st.session_state.convert_info = (
-            f"{style} / {strength} / {density} / "
-            f"BPM {bpm} / Key {detected_key} / Events {event_count} / {APP_VERSION}"
+            f"{style} / {strength} / Key {key_name} / BPM {bpm} / Sections {section_count} / {APP_VERSION}"
         )
 
     if st.session_state.converted_bytes:
-        st.success("Full 8-Bit Rebuild Complete!")
+        st.success("Musical 8-Bit Arrangement Complete!")
 
         st.write(f"Info: {st.session_state.convert_info}")
 
@@ -858,8 +933,8 @@ if uploaded:
         )
 
         st.download_button(
-            "⬇ Download Full 8-Bit Rebuild",
+            "⬇ Download Musical 8-Bit Arrangement",
             st.session_state.converted_bytes,
-            file_name="pacoel_full_8bit_rebuild.mp3",
+            file_name="pacoel_musical_8bit_arrangement.mp3",
             mime="audio/mpeg",
         )

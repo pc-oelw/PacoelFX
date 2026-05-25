@@ -410,7 +410,7 @@ def generate_ai_audio(prompt, input_audio_path, duration=12, continuation=False)
     try:
         with open(input_audio_path, "rb") as audio_file:
             output = replicate.run(
-                "meta/musicgen",
+                "meta/musicgen:ed4031145f17b820ff6e17f78a174aaffb3e2080d629c8a4187bf4d7eb9c5f04",
                 input={
                     "model_version": "stereo-melody-large",
                     "prompt": prompt,

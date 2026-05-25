@@ -1,6 +1,6 @@
 import streamlit as st
 from pydub import AudioSegment
-from pydub.effects import speedup, high_pass_filter, low_pass_filter
+from pydub.effects import speedup, high_pass_filter
 import librosa
 import numpy as np
 import tempfile
@@ -33,8 +33,13 @@ except Exception:
 st.markdown("""
 <style>
 
+html, body, [class*="css"] {
+    color: #111111 !important;
+}
+
 .stApp {
-    background-color: #e7e7ea;
+    background-color: #d9d9dd;
+    color: #111111;
 }
 
 .main-title {
@@ -45,29 +50,48 @@ st.markdown("""
 
 .sub-title {
     font-size: 18px;
-    color: #666666;
+    color: #333333;
     margin-bottom: 35px;
 }
 
 .info-box {
-    background: white;
+    background: #cfcfd4;
+    color: #111111;
     padding: 22px;
     border-radius: 18px;
     margin-bottom: 25px;
-    box-shadow: 0px 4px 15px rgba(0,0,0,0.05);
+    box-shadow: 0px 4px 15px rgba(0,0,0,0.08);
+    border: 1px solid #b8b8bf;
 }
 
 .command-box {
-    background: white;
+    background: #cfcfd4;
+    color: #111111;
     padding: 20px;
     border-radius: 18px;
     margin-bottom: 25px;
-    box-shadow: 0px 4px 15px rgba(0,0,0,0.05);
+    box-shadow: 0px 4px 15px rgba(0,0,0,0.08);
+    border: 1px solid #b8b8bf;
+}
+
+.stTextArea textarea {
+    background-color: #e5e5e8 !important;
+    color: #111111 !important;
+    border-radius: 14px !important;
+    border: 1px solid #9d9da5 !important;
+}
+
+.stFileUploader {
+    background-color: #cfcfd4;
+    color: #111111;
+    padding: 16px;
+    border-radius: 18px;
+    border: 1px solid #b8b8bf;
 }
 
 .stButton button {
-    background-color: black;
-    color: white;
+    background-color: #111111;
+    color: #ffffff;
     border-radius: 16px;
     height: 54px;
     width: 100%;
@@ -76,13 +100,22 @@ st.markdown("""
 }
 
 .stDownloadButton button {
-    background-color: black;
-    color: white;
+    background-color: #111111;
+    color: #ffffff;
     border-radius: 16px;
     height: 54px;
     width: 100%;
     font-size: 18px;
     border: none;
+}
+
+div[data-testid="stMarkdownContainer"] {
+    color: #111111;
+}
+
+div[data-testid="stAlert"] {
+    background-color: #c7c7cc;
+    color: #111111;
 }
 
 </style>
@@ -258,7 +291,6 @@ def parse_command(user_command, detected_bpm):
 
     target_bpm = 240
 
-    # /bpm 250 같은 명령어 감지
     words = command.replace("/", " ").replace(":", " ").split()
 
     for i, word in enumerate(words):
@@ -273,7 +305,11 @@ def parse_command(user_command, detected_bpm):
         min(target_bpm, 280)
     )
 
-    if "260" in command:
+    if "280" in command:
+        target_bpm = 280
+    elif "270" in command:
+        target_bpm = 270
+    elif "260" in command:
         target_bpm = 260
     elif "250" in command:
         target_bpm = 250
@@ -283,7 +319,7 @@ def parse_command(user_command, detected_bpm):
         target_bpm = 220
 
     if "sudden" in command or "갑자기" in command:
-        drop_type = "sudden explosive drop"
+        drop_type = "sudden explosive tempo switch drop"
     elif "smooth" in command or "자연" in command:
         drop_type = "smooth build into a fast drop"
     else:
@@ -371,47 +407,68 @@ def export_segment(segment, suffix=".wav"):
 # Replicate MusicGen call
 # -------------------------
 def generate_ai_audio(prompt, input_audio_path, duration=12, continuation=False):
-    with open(input_audio_path, "rb") as audio_file:
-        output = replicate.run(
-            "meta/musicgen",
-            input={
-                "model_version": "stereo-melody-large",
-                "prompt": prompt,
-                "input_audio": audio_file,
-                "duration": duration,
-                "continuation": continuation,
-                "output_format": "mp3",
-                "temperature": 1.15,
-                "classifier_free_guidance": 5,
-                "top_k": 250,
-                "top_p": 0
-            }
-        )
+    try:
+        with open(input_audio_path, "rb") as audio_file:
+            output = replicate.run(
+                "meta/musicgen",
+                input={
+                    "model_version": "stereo-melody-large",
+                    "prompt": prompt,
+                    "input_audio": audio_file,
+                    "duration": duration,
+                    "continuation": continuation,
+                    "output_format": "mp3",
+                    "temperature": 1.0,
+                    "classifier_free_guidance": 4,
+                    "top_k": 250,
+                    "top_p": 0
+                }
+            )
 
-    if isinstance(output, list):
-        output_url = output[0]
-    else:
-        output_url = output
+        return output
 
-    return str(output_url)
+    except Exception as e:
+        raise RuntimeError(f"Replicate generation failed: {e}")
 
 
 # -------------------------
 # Download generated audio
 # -------------------------
-def download_ai_audio(url):
+def download_ai_audio(output):
+    temp_audio = tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix=".mp3"
+    )
+
+    # FileOutput object
+    if hasattr(output, "read"):
+        temp_audio.write(output.read())
+        temp_audio.close()
+        return temp_audio.name
+
+    # List output
+    if isinstance(output, list):
+        first = output[0]
+
+        if hasattr(first, "read"):
+            temp_audio.write(first.read())
+            temp_audio.close()
+            return temp_audio.name
+
+        url = str(first)
+
+    else:
+        url = str(output)
+
     response = requests.get(
         url,
         timeout=180
     )
 
     if response.status_code != 200:
-        raise RuntimeError("Failed to download AI audio.")
-
-    temp_audio = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".mp3"
-    )
+        raise RuntimeError(
+            f"Failed to download AI audio. Status code: {response.status_code}"
+        )
 
     temp_audio.write(response.content)
     temp_audio.close()
@@ -429,7 +486,7 @@ def process_intro(original_intro, ai_intro_layer, bpm):
     # AI intro layer를 작게 깔아서 초반도 확실히 변하게 함
     if ai_intro_layer:
         ai_layer = ai_intro_layer[:len(intro)]
-        ai_layer = ai_layer - 9
+        ai_layer = ai_layer - 7
         ai_layer = high_pass_filter(ai_layer, 120)
 
         intro = intro.overlay(
@@ -437,9 +494,8 @@ def process_intro(original_intro, ai_intro_layer, bpm):
             position=0
         )
 
-    # 뒤쪽에 아주 약한 리듬 추가
     beat_ms = int(60000 / max(80, bpm))
-    start = int(len(intro) * 0.45)
+    start = int(len(intro) * 0.35)
     end = len(intro) - 900
 
     for pos in range(start, max(start, end), beat_ms * 2):
@@ -479,7 +535,6 @@ def process_build(build, bpm):
             speeds[i]
         )
 
-        # 점점 커지게
         chunk = chunk + i
 
         if len(result) == 0:
@@ -494,14 +549,12 @@ def process_build(build, bpm):
     end_limit = len(result) - 800
 
     for pos in range(0, max(0, end_limit), beat_ms):
-        # 빌드업 하이햇
         if hihat:
             result = result.overlay(
                 hihat - 18,
                 position=pos + beat_ms // 2
             )
 
-        # 뒤쪽에만 킥
         if kick and pos > len(result) * 0.50 and pos % (beat_ms * 2) == 0:
             result = result.overlay(
                 kick - 10,
@@ -520,7 +573,6 @@ def process_ai_drop(ai_drop, target_bpm):
     beat_ms = int(60000 / target_bpm)
     kick_interval = max(95, beat_ms // 2)
 
-    # 끝까지 드럼 넣지 않음
     end_limit = len(drop) - 1500
 
     for pos in range(0, max(0, end_limit), kick_interval):
@@ -542,9 +594,9 @@ def process_ai_drop(ai_drop, target_bpm):
                 position=pos + 60
             )
 
-        # 더블킥 포인트
         if kick and pos % (kick_interval * 8) == 0:
             extra = pos + int(kick_interval * 0.55)
+
             if extra < end_limit:
                 drop = drop.overlay(
                     kick - 2,
@@ -590,6 +642,9 @@ if "ai_used" not in st.session_state:
 if "remix_source" not in st.session_state:
     st.session_state.remix_source = None
 
+if "error_text" not in st.session_state:
+    st.session_state.error_text = None
+
 
 # -------------------------
 # UI
@@ -603,8 +658,7 @@ st.markdown('<div class="command-box">', unsafe_allow_html=True)
 
 user_command = st.text_area(
     "AI Remix Command",
-    placeholder="""예시:
-/style chaotic j-core speedcore
+    value="""/style chaotic j-core speedcore
 /bpm 250
 /drop sudden tempo switch
 /intro glitchy chopped melody
@@ -622,6 +676,7 @@ if uploaded:
         st.session_state.remix_bpm = None
         st.session_state.drop_bpm = None
         st.session_state.ai_used = None
+        st.session_state.error_text = None
         st.session_state.remix_source = uploaded.name
 
     st.audio(uploaded)
@@ -677,9 +732,6 @@ if uploaded:
             else:
                 status.write(steps[9])
 
-        # -------------------------
-        # Save upload
-        # -------------------------
         file_ext = os.path.splitext(uploaded.name)[1]
 
         if file_ext.lower() not in [".mp3", ".wav"]:
@@ -690,9 +742,6 @@ if uploaded:
             tmp.write(uploaded.read())
             temp_path = tmp.name
 
-        # -------------------------
-        # Analyze
-        # -------------------------
         bpm, beat_ms, rms, rms_times = analyze_audio(temp_path)
 
         original_audio = AudioSegment.from_file(temp_path)
@@ -710,7 +759,6 @@ if uploaded:
             beat_ms
         )
 
-        # intro는 너무 길게 두지 않음
         intro_target = int(drop_start * 0.42)
 
         intro_end = nearest_beat_ms(
@@ -737,9 +785,6 @@ if uploaded:
         build = original_audio[intro_end:drop_start]
         original_drop_ref = original_audio[drop_start:]
 
-        # -------------------------
-        # Command
-        # -------------------------
         command_info = parse_command(
             user_command,
             bpm
@@ -755,9 +800,6 @@ if uploaded:
             command_info
         )
 
-        # -------------------------
-        # Reference audio for AI
-        # -------------------------
         intro_ref = original_audio[:min(len(original_audio), 9000)]
 
         build_ref_start = max(
@@ -782,16 +824,14 @@ if uploaded:
             suffix=".wav"
         )
 
-        # -------------------------
-        # AI generate
-        # -------------------------
         ai_success = False
         ai_intro_layer = None
+        error_text = None
 
         try:
             status.write("Generating AI intro layer from your song...")
 
-            intro_url = generate_ai_audio(
+            intro_output = generate_ai_audio(
                 intro_prompt,
                 intro_ref_path,
                 duration=8,
@@ -799,7 +839,7 @@ if uploaded:
             )
 
             intro_ai_path = download_ai_audio(
-                intro_url
+                intro_output
             )
 
             ai_intro_layer = AudioSegment.from_file(
@@ -808,7 +848,7 @@ if uploaded:
 
             status.write("Generating melody-based AI speedcore drop...")
 
-            drop_url = generate_ai_audio(
+            drop_output = generate_ai_audio(
                 drop_prompt,
                 build_ref_path,
                 duration=18,
@@ -816,7 +856,7 @@ if uploaded:
             )
 
             drop_ai_path = download_ai_audio(
-                drop_url
+                drop_output
             )
 
             ai_drop = AudioSegment.from_file(
@@ -831,8 +871,10 @@ if uploaded:
             ai_success = True
 
         except Exception as e:
+            error_text = str(e)
+
             st.warning("AI generation failed. Using fallback remix mode.")
-            st.caption(str(e))
+            st.caption(error_text)
 
             ai_intro_layer = None
 
@@ -843,9 +885,6 @@ if uploaded:
 
             ai_success = False
 
-        # -------------------------
-        # Local processing
-        # -------------------------
         intro = process_intro(
             intro,
             ai_intro_layer,
@@ -861,9 +900,6 @@ if uploaded:
             duration=240
         )
 
-        # -------------------------
-        # Combine
-        # -------------------------
         remix = intro.append(
             build,
             crossfade=220
@@ -881,15 +917,11 @@ if uploaded:
 
         remix = remix.fade_out(1200)
 
-        # 너무 길어지는 것 방지
         max_len = len(original_audio) + 4000
 
         if len(remix) > max_len:
             remix = remix[:max_len]
 
-        # -------------------------
-        # Export
-        # -------------------------
         output_path = "pacoel_command_ai_remix.mp3"
 
         remix.export(
@@ -903,6 +935,7 @@ if uploaded:
         st.session_state.remix_bpm = bpm
         st.session_state.drop_bpm = target_bpm
         st.session_state.ai_used = ai_success
+        st.session_state.error_text = error_text
 
     if st.session_state.remix_bytes:
         st.write(f"Detected BPM: {st.session_state.remix_bpm}")
@@ -912,6 +945,9 @@ if uploaded:
             st.success("Generative AI used your audio as a reference.")
         else:
             st.info("Fallback remix mode was used.")
+
+            if st.session_state.error_text:
+                st.caption(st.session_state.error_text)
 
         st.success("Remix Complete!")
 

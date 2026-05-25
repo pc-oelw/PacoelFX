@@ -1,3 +1,4 @@
 streamlit
-pydub
+pydub==0.25.1
 numpy
+audioop-lts

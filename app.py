@@ -106,16 +106,17 @@ st.markdown(
 )
 
 st.markdown(
-    '<div class="sub-title">Sharp 8-Bit Audio Converter</div>',
+    '<div class="sub-title">True Retro 8-Bit Converter</div>',
     unsafe_allow_html=True
 )
 
 st.markdown("""
 <div class="info-box">
 
-Upload a song and convert the whole track into a sharper retro 8-bit style.
-This version avoids the muffled sound by keeping more high frequencies
-and adding digital crunch instead of simply cutting the audio.
+Upload a song and convert the whole track into a stronger retro 8-bit style.
+This version does not add new melodies or drums. It reshapes the whole audio
+with waveform quantization, sample-rate reduction, square-like distortion,
+and console-style filtering.
 
 </div>
 """, unsafe_allow_html=True)
@@ -164,11 +165,10 @@ def numpy_to_audiosegment(samples, frame_rate, channels):
     )
 
 
-def bit_depth_reduce(audio, bits=8):
+def bit_depth_reduce(audio, bits=6):
     samples, frame_rate, channels = audiosegment_to_numpy(audio)
 
     max_amp = 32767.0
-
     levels = 2 ** bits
 
     reduced = np.round(
@@ -182,30 +182,30 @@ def bit_depth_reduce(audio, bits=8):
     )
 
 
-def sample_rate_reduce(audio, target_rate=12000):
-    original_rate = audio.frame_rate
-
-    reduced = audio.set_frame_rate(
-        target_rate
-    )
-
-    restored = reduced.set_frame_rate(
-        original_rate
-    )
-
-    return restored
-
-
-def add_digital_noise(audio, amount=0.006):
+def sample_hold(audio, hold=4):
+    """
+    샘플을 일정 개수만큼 붙잡아서 계단식 디지털 느낌을 만듦.
+    이게 기존 버전보다 8-bit 느낌을 더 강하게 냄.
+    """
     samples, frame_rate, channels = audiosegment_to_numpy(audio)
 
-    noise = np.random.uniform(
-        -1,
-        1,
-        samples.shape
-    ) * 32767 * amount
+    if channels == 2:
+        result = samples.copy()
 
-    result = samples + noise
+        for ch in range(2):
+            channel = result[:, ch]
+            held = channel.copy()
+
+            for i in range(0, len(channel), hold):
+                held[i:i + hold] = channel[i]
+
+            result[:, ch] = held
+
+    else:
+        result = samples.copy()
+
+        for i in range(0, len(samples), hold):
+            result[i:i + hold] = samples[i]
 
     return numpy_to_audiosegment(
         result,
@@ -214,20 +214,22 @@ def add_digital_noise(audio, amount=0.006):
     )
 
 
-def hard_clip(audio, drive=1.35):
+def square_shape(audio, amount=0.55):
+    """
+    원곡 파형을 약간 사각파처럼 바꿈.
+    amount가 높을수록 게임기 느낌이 강해짐.
+    """
     samples, frame_rate, channels = audiosegment_to_numpy(audio)
 
     normalized = samples / 32767.0
 
-    driven = normalized * drive
-
-    clipped = np.clip(
-        driven,
-        -0.85,
-        0.85
+    squared = np.sign(normalized) * np.sqrt(
+        np.abs(normalized)
     )
 
-    output = clipped / 0.85 * 32767.0
+    mixed = normalized * (1 - amount) + squared * amount
+
+    output = mixed * 32767.0
 
     return numpy_to_audiosegment(
         output,
@@ -236,107 +238,255 @@ def hard_clip(audio, drive=1.35):
     )
 
 
-def add_brightness(original, processed, strength=0.45):
-    # 원본에서 고음 느낌만 약하게 가져와서 먹먹함 방지
-    bright = original.high_pass_filter(3500)
+def stair_step_distortion(audio, steps=18, mix=0.65):
+    """
+    파형을 계단식으로 만들어서 진짜 8-bit스럽게 만듦.
+    """
+    samples, frame_rate, channels = audiosegment_to_numpy(audio)
 
-    bright = bright - int(12 - strength * 10)
+    normalized = samples / 32767.0
 
-    result = processed.overlay(
-        bright
+    stepped = np.round(
+        normalized * steps
+    ) / steps
+
+    mixed = normalized * (1 - mix) + stepped * mix
+
+    output = mixed * 32767.0
+
+    return numpy_to_audiosegment(
+        output,
+        frame_rate,
+        channels
     )
 
-    return result
+
+def downsample_hard(audio, target_rate=9000):
+    original_rate = audio.frame_rate
+
+    lowered = audio.set_frame_rate(
+        target_rate
+    )
+
+    restored = lowered.set_frame_rate(
+        original_rate
+    )
+
+    return restored
 
 
-def retro_eq(audio, mode):
-    # 예전 버전처럼 고음을 세게 자르지 않음
-    if mode == "Soft":
-        result = audio.high_pass_filter(35)
-        result = result.low_pass_filter(15500)
+def add_tiny_digital_noise(audio, amount=0.006):
+    samples, frame_rate, channels = audiosegment_to_numpy(audio)
+
+    noise = np.random.uniform(
+        -1,
+        1,
+        samples.shape
+    ) * 32767 * amount
+
+    output = samples + noise
+
+    return numpy_to_audiosegment(
+        output,
+        frame_rate,
+        channels
+    )
+
+
+def hard_clip(audio, drive=1.5):
+    samples, frame_rate, channels = audiosegment_to_numpy(audio)
+
+    normalized = samples / 32767.0
+
+    driven = normalized * drive
+
+    clipped = np.clip(
+        driven,
+        -0.78,
+        0.78
+    )
+
+    output = clipped / 0.78 * 32767.0
+
+    return numpy_to_audiosegment(
+        output,
+        frame_rate,
+        channels
+    )
+
+
+def retro_console_eq(audio, mode):
+    """
+    먹먹하지 않게 너무 과한 로우패스는 피하고,
+    저음 뭉침을 줄여서 게임기 스피커 같은 느낌을 만듦.
+    """
+    if mode == "Light":
+        result = audio.high_pass_filter(80)
+        result = result.low_pass_filter(14000)
         return result
 
-    if mode == "Classic":
-        result = audio.high_pass_filter(45)
-        result = result.low_pass_filter(13500)
+    if mode == "Gameboy":
+        result = audio.high_pass_filter(120)
+        result = result.low_pass_filter(10000)
         return result
 
-    if mode == "Extreme":
-        result = audio.high_pass_filter(65)
-        result = result.low_pass_filter(11500)
+    if mode == "NES":
+        result = audio.high_pass_filter(160)
+        result = result.low_pass_filter(8500)
+        return result
+
+    if mode == "Broken Console":
+        result = audio.high_pass_filter(220)
+        result = result.low_pass_filter(6500)
         return result
 
     return audio
 
 
-def convert_to_8bit(audio, mode):
+def add_brightness(original, processed, mode):
+    """
+    원곡의 고역 일부를 아주 작게 섞어서 답답함 방지.
+    """
+    if mode == "Light":
+        gain = -12
+    elif mode == "Gameboy":
+        gain = -14
+    elif mode == "NES":
+        gain = -16
+    else:
+        gain = -18
+
+    bright = original.high_pass_filter(4000)
+    bright = bright + gain
+
+    return processed.overlay(
+        bright
+    )
+
+
+def mono_console(audio, strength=0.8):
+    """
+    8비트 게임기 느낌을 위해 스테레오를 약하게 모노화.
+    """
+    if audio.channels == 1:
+        return audio
+
+    mono = audio.set_channels(1).set_channels(2)
+
+    original = audio - int(strength * 5)
+    mono = mono - int((1 - strength) * 5)
+
+    return original.overlay(
+        mono
+    )
+
+
+def convert_to_true_8bit(audio, mode):
     audio = audio.set_sample_width(2)
 
     original = normalize(audio)
 
-    if mode == "Soft":
-        bits = 8
-        sample_rate = 16000
-        noise = 0.003
-        drive = 1.15
-        brightness = 0.35
-
-    elif mode == "Classic":
+    if mode == "Light":
         bits = 7
-        sample_rate = 12000
-        noise = 0.006
-        drive = 1.35
-        brightness = 0.50
+        sample_rate = 16000
+        hold = 2
+        square_amount = 0.30
+        stair_mix = 0.40
+        steps = 32
+        noise = 0.002
+        drive = 1.15
+        mono_strength = 0.35
+
+    elif mode == "Gameboy":
+        bits = 6
+        sample_rate = 11025
+        hold = 4
+        square_amount = 0.55
+        stair_mix = 0.65
+        steps = 18
+        noise = 0.005
+        drive = 1.40
+        mono_strength = 0.65
+
+    elif mode == "NES":
+        bits = 5
+        sample_rate = 9000
+        hold = 5
+        square_amount = 0.70
+        stair_mix = 0.78
+        steps = 14
+        noise = 0.007
+        drive = 1.55
+        mono_strength = 0.80
 
     else:
-        bits = 6
-        sample_rate = 9000
-        noise = 0.010
-        drive = 1.55
-        brightness = 0.65
+        bits = 4
+        sample_rate = 7000
+        hold = 7
+        square_amount = 0.82
+        stair_mix = 0.88
+        steps = 10
+        noise = 0.011
+        drive = 1.85
+        mono_strength = 0.95
 
     processed = original
 
-    # 1. 샘플레이트 낮춰서 레트로 디지털 질감
-    processed = sample_rate_reduce(
+    processed = mono_console(
+        processed,
+        strength=mono_strength
+    )
+
+    processed = downsample_hard(
         processed,
         target_rate=sample_rate
     )
 
-    # 2. 비트 깊이 감소
+    processed = sample_hold(
+        processed,
+        hold=hold
+    )
+
     processed = bit_depth_reduce(
         processed,
         bits=bits
     )
 
-    # 3. 먹먹하지 않게 EQ는 약하게
-    processed = retro_eq(
+    processed = stair_step_distortion(
         processed,
-        mode
+        steps=steps,
+        mix=stair_mix
     )
 
-    # 4. 디지털 노이즈
-    processed = add_digital_noise(
+    processed = square_shape(
         processed,
-        amount=noise
+        amount=square_amount
     )
 
-    # 5. 약한 하드 클리핑으로 게임기 같은 날카로움
     processed = hard_clip(
         processed,
         drive=drive
     )
 
-    # 6. 원곡 고음 일부를 섞어서 먹먹함 방지
+    processed = retro_console_eq(
+        processed,
+        mode
+    )
+
+    processed = add_tiny_digital_noise(
+        processed,
+        amount=noise
+    )
+
     processed = add_brightness(
         original,
         processed,
-        strength=brightness
+        mode
     )
 
     processed = normalize(processed)
 
-    processed = processed.fade_in(120)
+    processed = processed.fade_in(80)
     processed = processed.fade_out(700)
 
     return processed
@@ -353,17 +503,18 @@ uploaded = st.file_uploader(
 st.markdown('<div class="control-box">', unsafe_allow_html=True)
 
 mode = st.selectbox(
-    "8-Bit Conversion Strength",
+    "8-Bit Mode",
     [
-        "Soft",
-        "Classic",
-        "Extreme"
+        "Light",
+        "Gameboy",
+        "NES",
+        "Broken Console"
     ],
     index=1
 )
 
 st.write(
-    "Soft = 원곡 보존 / Classic = 선명한 8-bit / Extreme = 더 거친 디지털 깨짐"
+    "Light = 약한 레트로 / Gameboy = 추천 / NES = 더 강한 8비트 / Broken Console = 많이 깨짐"
 )
 
 st.markdown("</div>", unsafe_allow_html=True)
@@ -376,17 +527,17 @@ if uploaded:
 
     st.audio(uploaded)
 
-    if st.button("Convert Whole Song to Sharp 8-Bit"):
+    if st.button("Convert Whole Song to True 8-Bit"):
         progress = st.progress(0)
         status = st.empty()
 
         steps = [
             "Uploading audio...",
             "Preparing full track...",
+            "Applying console mono...",
             "Reducing sample rate...",
-            "Reducing bit depth...",
-            "Adding digital crunch...",
-            "Restoring brightness...",
+            "Creating stair-step waveform...",
+            "Adding square-wave texture...",
             "Finalizing 8-bit version..."
         ]
 
@@ -398,13 +549,13 @@ if uploaded:
                 status.write(steps[0])
             elif i < 25:
                 status.write(steps[1])
-            elif i < 40:
+            elif i < 38:
                 status.write(steps[2])
-            elif i < 58:
+            elif i < 52:
                 status.write(steps[3])
-            elif i < 75:
+            elif i < 70:
                 status.write(steps[4])
-            elif i < 90:
+            elif i < 88:
                 status.write(steps[5])
             else:
                 status.write(steps[6])
@@ -425,12 +576,12 @@ if uploaded:
             st.error("Audio is too short. Please upload a longer song.")
             st.stop()
 
-        converted = convert_to_8bit(
+        converted = convert_to_true_8bit(
             audio,
             mode
         )
 
-        output_path = "pacoel_sharp_8bit_convert.mp3"
+        output_path = "pacoel_true_8bit_convert.mp3"
 
         converted.export(
             output_path,
@@ -443,7 +594,7 @@ if uploaded:
         st.session_state.convert_info = mode
 
     if st.session_state.converted_bytes:
-        st.success("Sharp 8-Bit Conversion Complete!")
+        st.success("True 8-Bit Conversion Complete!")
 
         st.write(f"Mode: {st.session_state.convert_info}")
 
@@ -453,8 +604,8 @@ if uploaded:
         )
 
         st.download_button(
-            "⬇ Download Sharp 8-Bit Version",
+            "⬇ Download True 8-Bit Version",
             st.session_state.converted_bytes,
-            file_name="pacoel_sharp_8bit_convert.mp3",
+            file_name="pacoel_true_8bit_convert.mp3",
             mime="audio/mpeg",
         )

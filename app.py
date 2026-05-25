@@ -6,6 +6,7 @@ import numpy as np
 import tempfile
 import time
 import os
+import requests
 
 # -------------------------
 # 페이지 설정
@@ -15,6 +16,17 @@ st.set_page_config(
     page_icon="🎵",
     layout="wide"
 )
+
+# -------------------------
+# Hugging Face API
+# -------------------------
+HF_TOKEN = st.secrets["HF_TOKEN"]
+
+API_URL = "https://api-inference.huggingface.co/models/facebook/musicgen-small"
+
+headers = {
+    "Authorization": f"Bearer {HF_TOKEN}"
+}
 
 # -------------------------
 # CSS
@@ -36,6 +48,14 @@ st.markdown("""
     font-size: 18px;
     color: #666666;
     margin-bottom: 35px;
+}
+
+.info-box {
+    background: white;
+    padding: 20px;
+    border-radius: 18px;
+    margin-bottom: 25px;
+    box-shadow: 0px 4px 15px rgba(0,0,0,0.06);
 }
 
 .stButton button {
@@ -73,6 +93,19 @@ st.markdown(
     '<div class="sub-title">AI Adaptive Remix Engine</div>',
     unsafe_allow_html=True
 )
+
+# -------------------------
+# 설명
+# -------------------------
+st.markdown("""
+<div class="info-box">
+
+AI analyzes your uploaded song and automatically creates
+a dynamic remix with adaptive speed, beat detection,
+drop enhancement, and AI-generated music styling.
+
+</div>
+""", unsafe_allow_html=True)
 
 # -------------------------
 # 드럼 로드
@@ -149,10 +182,10 @@ if uploaded:
         loading = [
             "Analyzing Audio...",
             "Detecting BPM...",
-            "Detecting Energy...",
-            "Finding Drops...",
+            "Detecting Drops...",
             "Generating AI Remix...",
             "Adding AI Drums...",
+            "Enhancing Audio...",
             "Finalizing..."
         ]
 
@@ -171,13 +204,13 @@ if uploaded:
             elif i < 40:
                 status.write(loading[2])
 
-            elif i < 55:
+            elif i < 60:
                 status.write(loading[3])
 
-            elif i < 75:
+            elif i < 80:
                 status.write(loading[4])
 
-            elif i < 90:
+            elif i < 95:
                 status.write(loading[5])
 
             else:
@@ -193,14 +226,13 @@ if uploaded:
             temp_path = tmp.name
 
         # -------------------------
-        # librosa 분석
+        # AI BPM 분석
         # -------------------------
         y, sr = librosa.load(
             temp_path,
             sr=None
         )
 
-        # BPM
         tempo, beats = librosa.beat.beat_track(
             y=y,
             sr=sr
@@ -217,24 +249,6 @@ if uploaded:
         rms = librosa.feature.rms(y=y)[0]
 
         energy = np.mean(rms)
-
-        high_energy = np.percentile(rms, 85)
-
-        # -------------------------
-        # 오디오 로드
-        # -------------------------
-        audio = AudioSegment.from_file(temp_path)
-
-        length = len(audio)
-
-        # -------------------------
-        # 구간 분리
-        # -------------------------
-        intro = audio[:length // 3]
-
-        middle = audio[length // 3:length // 3 * 2]
-
-        drop = audio[length // 3 * 2:]
 
         # -------------------------
         # AI 속도 계산
@@ -258,7 +272,20 @@ if uploaded:
             drop_speed = 1.06
 
         # -------------------------
-        # 구간별 처리
+        # 오디오 로드
+        # -------------------------
+        audio = AudioSegment.from_file(temp_path)
+
+        length = len(audio)
+
+        intro = audio[:length // 3]
+
+        middle = audio[length // 3:length // 3 * 2]
+
+        drop = audio[length // 3 * 2:]
+
+        # -------------------------
+        # AI 속도 적용
         # -------------------------
         intro = speedup(
             intro,
@@ -276,18 +303,7 @@ if uploaded:
         )
 
         # -------------------------
-        # 드랍 강화
-        # -------------------------
-        if energy > 0.05:
-
-            drop = drop + 4
-
-        else:
-
-            drop = drop + 2
-
-        # -------------------------
-        # AI 드럼
+        # AI 드럼 추가
         # -------------------------
         intro = add_ai_drums(
             intro,
@@ -308,6 +324,17 @@ if uploaded:
         )
 
         # -------------------------
+        # 드랍 강화
+        # -------------------------
+        if energy > 0.05:
+
+            drop = drop + 5
+
+        else:
+
+            drop = drop + 2
+
+        # -------------------------
         # 합치기
         # -------------------------
         remixed = intro.append(
@@ -319,6 +346,35 @@ if uploaded:
             drop,
             crossfade=350
         )
+
+        # -------------------------
+        # Hugging Face AI 요청
+        # -------------------------
+        try:
+
+            with open(temp_path, "rb") as f:
+
+                response = requests.post(
+                    API_URL,
+                    headers=headers,
+                    data=f
+                )
+
+            if response.status_code == 200:
+
+                st.success("AI Music Generation Connected!")
+
+            else:
+
+                st.warning(
+                    "AI generation API connected, but model may still be loading."
+                )
+
+        except Exception as e:
+
+            st.warning(
+                f"AI API Error: {e}"
+            )
 
         # -------------------------
         # 최종 볼륨

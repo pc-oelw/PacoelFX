@@ -7,7 +7,7 @@ import tempfile
 import time
 import os
 import requests
-from gradio_client import Client, handle_file
+from gradio_client import Client
 
 # -------------------------
 # Page config
@@ -410,17 +410,16 @@ def generate_ai_audio(prompt, input_audio_path, duration=12):
     try:
         client = get_hf_client()
 
-        # Try melody-based call with fn_index=0
+        # 구버전 gradio_client에서는 handle_file을 쓰지 않고 파일 경로를 그대로 넘김
         try:
             result = client.predict(
                 prompt,
-                handle_file(input_audio_path),
+                input_audio_path,
                 fn_index=0
             )
             return result
 
         except Exception as first_error:
-            # Try text-only call
             try:
                 result = client.predict(
                     prompt,

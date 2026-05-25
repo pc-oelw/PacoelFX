@@ -6,6 +6,7 @@ import numpy as np
 import tempfile
 import time
 import os
+import subprocess
 
 # -------------------------
 # 페이지 설정
@@ -78,16 +79,16 @@ st.markdown(
 )
 
 st.markdown(
-    '<div class="sub-title">Adaptive Speedcore Remix Engine</div>',
+    '<div class="sub-title">AI Stem Speedcore Remix Engine</div>',
     unsafe_allow_html=True
 )
 
 st.markdown("""
 <div class="info-box">
 
-Upload a song and Pacoel Wave will analyze the BPM,
-preserve the original intro, build up the energy,
-and create a speedcore-inspired drop with drums.
+Upload a song and Pacoel Wave will separate the track with Demucs AI,
+preserve the original musical feeling, remove the original drums,
+and create a speedcore-inspired remix with new drums.
 
 </div>
 """, unsafe_allow_html=True)
@@ -156,12 +157,79 @@ def analyze_bpm(file_path):
 
 
 # -------------------------
+# Demucs AI 분리 함수
+# -------------------------
+def separate_with_demucs(input_path):
+    output_dir = tempfile.mkdtemp()
+
+    command = [
+        "python",
+        "-m",
+        "demucs",
+        "-n",
+        "htdemucs",
+        "--out",
+        output_dir,
+        input_path
+    ]
+
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr)
+
+    song_name = os.path.splitext(
+        os.path.basename(input_path)
+    )[0]
+
+    stem_dir = os.path.join(
+        output_dir,
+        "htdemucs",
+        song_name
+    )
+
+    vocals_path = os.path.join(stem_dir, "vocals.wav")
+    drums_path = os.path.join(stem_dir, "drums.wav")
+    bass_path = os.path.join(stem_dir, "bass.wav")
+    other_path = os.path.join(stem_dir, "other.wav")
+
+    if not os.path.exists(vocals_path):
+        raise FileNotFoundError("vocals.wav was not created by Demucs.")
+
+    if not os.path.exists(bass_path):
+        raise FileNotFoundError("bass.wav was not created by Demucs.")
+
+    if not os.path.exists(other_path):
+        raise FileNotFoundError("other.wav was not created by Demucs.")
+
+    return vocals_path, drums_path, bass_path, other_path
+
+
+# -------------------------
+# 드럼 제거된 반주 만들기
+# -------------------------
+def make_no_drums_audio(vocals_path, bass_path, other_path):
+    vocals = AudioSegment.from_file(vocals_path)
+    bass = AudioSegment.from_file(bass_path)
+    other = AudioSegment.from_file(other_path)
+
+    base = vocals.overlay(bass)
+    base = base.overlay(other)
+
+    return base
+
+
+# -------------------------
 # 드럼 추가 함수
 # -------------------------
 def add_drums(audio, bpm, section="build"):
     output = audio
 
-    bpm = max(80, min(int(bpm), 260))
+    bpm = max(80, min(int(bpm), 280))
     beat_ms = int(60000 / bpm)
 
     if section == "intro":
@@ -182,8 +250,7 @@ def add_drums(audio, bpm, section="build"):
                 )
 
     elif section == "drop":
-        # 스피드코어 느낌: 킥 밀도를 높임
-        interval = max(115, beat_ms // 2)
+        interval = max(105, beat_ms // 2)
 
         for pos in range(0, len(audio), interval):
             if kick:
@@ -226,14 +293,20 @@ def create_buildup(audio):
 
 
 # -------------------------
-# 세션 상태 (다운로드 후 리런 시 리믹스 유지)
+# 세션 상태
 # -------------------------
 if "remix_bytes" not in st.session_state:
     st.session_state.remix_bytes = None
+
 if "remix_bpm" not in st.session_state:
     st.session_state.remix_bpm = None
+
 if "remix_source" not in st.session_state:
     st.session_state.remix_source = None
+
+if "demucs_used" not in st.session_state:
+    st.session_state.demucs_used = None
+
 
 # -------------------------
 # 업로드
@@ -250,21 +323,24 @@ if uploaded:
     if st.session_state.remix_source != uploaded.name:
         st.session_state.remix_bytes = None
         st.session_state.remix_bpm = None
+        st.session_state.demucs_used = None
         st.session_state.remix_source = uploaded.name
 
     st.audio(uploaded)
 
-    if st.button("Generate Remix"):
+    if st.button("Generate AI Stem Remix"):
         progress = st.progress(0)
         status = st.empty()
 
         steps = [
             "Uploading audio...",
             "Analyzing BPM...",
+            "Separating stems with Demucs AI...",
+            "Removing original drums...",
             "Preserving intro...",
             "Creating build-up...",
             "Generating speedcore drop...",
-            "Adding drums...",
+            "Adding new drums...",
             "Finalizing remix..."
         ]
 
@@ -272,25 +348,34 @@ if uploaded:
             time.sleep(0.015)
             progress.progress(i)
 
-            if i < 10:
+            if i < 8:
                 status.write(steps[0])
-            elif i < 25:
+            elif i < 18:
                 status.write(steps[1])
-            elif i < 40:
+            elif i < 38:
                 status.write(steps[2])
-            elif i < 60:
+            elif i < 48:
                 status.write(steps[3])
-            elif i < 80:
+            elif i < 58:
                 status.write(steps[4])
-            elif i < 95:
+            elif i < 70:
                 status.write(steps[5])
-            else:
+            elif i < 84:
                 status.write(steps[6])
+            elif i < 95:
+                status.write(steps[7])
+            else:
+                status.write(steps[8])
 
         # -------------------------
         # 임시 파일 저장
         # -------------------------
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
+        file_ext = os.path.splitext(uploaded.name)[1]
+
+        if file_ext.lower() not in [".mp3", ".wav"]:
+            file_ext = ".mp3"
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
             uploaded.seek(0)
             tmp.write(uploaded.read())
             temp_path = tmp.name
@@ -301,13 +386,39 @@ if uploaded:
         bpm, beat_times = analyze_bpm(temp_path)
 
         # -------------------------
-        # 오디오 로드
+        # Demucs AI stem separation
         # -------------------------
-        audio = AudioSegment.from_file(temp_path)
+        demucs_success = False
 
+        try:
+            status.write("Separating stems with Demucs AI...")
+
+            vocals_path, drums_path, bass_path, other_path = separate_with_demucs(
+                temp_path
+            )
+
+            audio = make_no_drums_audio(
+                vocals_path,
+                bass_path,
+                other_path
+            )
+
+            demucs_success = True
+
+        except Exception as e:
+            st.warning(
+                "Demucs AI separation failed, so Pacoel Wave used the original audio instead."
+            )
+            st.caption(str(e))
+
+            audio = AudioSegment.from_file(temp_path)
+            demucs_success = False
+
+        # -------------------------
+        # 오디오 길이 확인
+        # -------------------------
         total = len(audio)
 
-        # 너무 짧은 파일 방지
         if total < 10000:
             st.error("Audio is too short. Please upload a longer song.")
             st.stop()
@@ -426,7 +537,7 @@ if uploaded:
         # -------------------------
         # 저장
         # -------------------------
-        output_path = "pacoel_speedcore_remix.mp3"
+        output_path = "pacoel_ai_stem_speedcore_remix.mp3"
 
         remix.export(
             output_path,
@@ -435,19 +546,29 @@ if uploaded:
 
         with open(output_path, "rb") as f:
             st.session_state.remix_bytes = f.read()
+
         st.session_state.remix_bpm = bpm
+        st.session_state.demucs_used = demucs_success
 
     if st.session_state.remix_bytes:
         if st.session_state.remix_bpm is not None:
             st.write(f"Detected BPM: {st.session_state.remix_bpm}")
 
+        if st.session_state.demucs_used:
+            st.success("Demucs AI stem separation was used.")
+        else:
+            st.info("Original audio mode was used.")
+
         st.success("Remix Complete!")
 
-        st.audio(st.session_state.remix_bytes, format="audio/mp3")
+        st.audio(
+            st.session_state.remix_bytes,
+            format="audio/mp3"
+        )
 
         st.download_button(
             "⬇ Download Remix",
             st.session_state.remix_bytes,
-            file_name="pacoel_speedcore_remix.mp3",
+            file_name="pacoel_ai_stem_speedcore_remix.mp3",
             mime="audio/mpeg",
         )

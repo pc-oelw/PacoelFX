@@ -5,3 +5,6 @@ audioop-lts
 librosa
 soundfile
 scipy
+demucs
+torch
+torchaudio

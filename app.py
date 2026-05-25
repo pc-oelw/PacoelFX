@@ -409,26 +409,11 @@ def generate_ai_audio(prompt, input_audio_path, duration=12):
     try:
         client = get_hf_client()
 
-        result = client.predict(
-            "facebook/musicgen-stereo-melody",
-            "",
-            "Default",
-            prompt,
-            handle_file(input_audio_path),
-            duration,
-            250,
-            0,
-            1.0,
-            4,
-            api_name="/predict_full"
-        )
-
-        return result
+        api_info = client.view_api()
+        raise RuntimeError(f"Available API info: {api_info}")
 
     except Exception as e:
         raise RuntimeError(f"Hugging Face MusicGen failed: {e}")
-
-
 # -------------------------
 # Extract generated audio path
 # -------------------------

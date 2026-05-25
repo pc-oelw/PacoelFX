@@ -1,6 +1,9 @@
 import streamlit as st
 from pydub import AudioSegment
 from pydub.effects import speedup
+import librosa
+import soundfile as sf
+import numpy as np
 import tempfile
 import time
 import os
@@ -68,12 +71,12 @@ st.markdown(
 )
 
 st.markdown(
-    '<div class="sub-title">Speedcore Remix Generator</div>',
+    '<div class="sub-title">AI Speedcore Remix Generator</div>',
     unsafe_allow_html=True
 )
 
 # -------------------------
-# 드럼 파일 로드
+# 드럼 로드
 # -------------------------
 def load_sound(path):
 
@@ -87,35 +90,35 @@ snare = load_sound("sounds/snare.wav")
 hihat = load_sound("sounds/hihat.wav")
 
 # -------------------------
-# 드럼 추가
+# AI 드럼 추가
 # -------------------------
-def add_drums(audio, bpm=170):
-
-    beat = int(60000 / bpm)
+def add_ai_drums(audio, beat_times):
 
     output = audio
 
-    for i in range(0, len(audio), beat):
+    for i, beat in enumerate(beat_times):
+
+        pos = int(beat * 1000)
 
         # 킥
-        if kick:
+        if kick and i % 2 == 0:
             output = output.overlay(
                 kick - 2,
-                position=i
+                position=pos
             )
 
         # 하이햇
         if hihat:
             output = output.overlay(
-                hihat - 10,
-                position=i + beat // 2
+                hihat - 12,
+                position=pos + 120
             )
 
         # 스네어
-        if snare:
+        if snare and i % 4 == 2:
             output = output.overlay(
-                snare - 5,
-                position=i + beat
+                snare - 6,
+                position=pos
             )
 
     return output
@@ -135,19 +138,43 @@ if uploaded:
 
     st.audio(uploaded)
 
-    if st.button("Generate Remix"):
+    if st.button("Generate AI Remix"):
 
         progress = st.progress(0)
 
         status = st.empty()
 
+        # -------------------------
+        # 진행 UI
+        # -------------------------
+        loading_texts = [
+            "Analyzing BPM...",
+            "Detecting Beats...",
+            "Generating Speedcore...",
+            "Adding Drums...",
+            "Finalizing Remix..."
+        ]
+
         for i in range(101):
 
-            time.sleep(0.02)
+            time.sleep(0.025)
 
             progress.progress(i)
 
-            status.write(f"Generating Speedcore... {i}%")
+            if i < 20:
+                status.write(loading_texts[0])
+
+            elif i < 40:
+                status.write(loading_texts[1])
+
+            elif i < 70:
+                status.write(loading_texts[2])
+
+            elif i < 90:
+                status.write(loading_texts[3])
+
+            else:
+                status.write(loading_texts[4])
 
         # -------------------------
         # 임시 저장
@@ -158,10 +185,43 @@ if uploaded:
 
             temp_path = tmp.name
 
+        # -------------------------
+        # librosa 분석
+        # -------------------------
+        y, sr = librosa.load(
+            temp_path,
+            sr=None
+        )
+
+        tempo, beats = librosa.beat.beat_track(
+            y=y,
+            sr=sr
+        )
+
+        beat_times = librosa.frames_to_time(
+            beats,
+            sr=sr
+        )
+
+        # -------------------------
+        # BPM 기반 속도
+        # -------------------------
+        if tempo < 100:
+            speed = 1.15
+
+        elif tempo < 130:
+            speed = 1.10
+
+        else:
+            speed = 1.05
+
+        # -------------------------
+        # pydub 로드
+        # -------------------------
         audio = AudioSegment.from_file(temp_path)
 
         # -------------------------
-        # 구간 분리
+        # 구간별 처리
         # -------------------------
         length = len(audio)
 
@@ -169,53 +229,48 @@ if uploaded:
 
         second = audio[length // 2:]
 
-        # -------------------------
         # 초반
-        # -------------------------
         first = speedup(
             first,
-            playback_speed=1.05
+            playback_speed=speed
         )
 
-        first = add_drums(
-            first,
-            bpm=165
-        )
-
-        # -------------------------
         # 후반 더 빠르게
-        # -------------------------
         second = speedup(
             second,
-            playback_speed=1.12
+            playback_speed=speed + 0.05
         )
 
-        second = add_drums(
-            second,
-            bpm=185
-        )
-
-        second = second + 3
-
-        # -------------------------
         # 합치기
-        # -------------------------
         remixed = first.append(
             second,
             crossfade=250
         )
 
         # -------------------------
+        # AI 드럼 추가
+        # -------------------------
+        remixed = add_ai_drums(
+            remixed,
+            beat_times
+        )
+
+        # -------------------------
+        # 볼륨
+        # -------------------------
+        remixed = remixed + 2
+
+        # -------------------------
         # 저장
         # -------------------------
-        output_path = "speedcore_remix.mp3"
+        output_path = "ai_speedcore_remix.mp3"
 
         remixed.export(
             output_path,
             format="mp3"
         )
 
-        st.success("Speedcore Remix Complete!")
+        st.success("AI Remix Complete!")
 
         st.audio(output_path)
 
@@ -224,5 +279,5 @@ if uploaded:
             st.download_button(
                 "⬇ Download Remix",
                 f,
-                file_name="speedcore_remix.mp3"
+                file_name="ai_speedcore_remix.mp3"
             )

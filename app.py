@@ -226,6 +226,16 @@ def create_buildup(audio):
 
 
 # -------------------------
+# 세션 상태 (다운로드 후 리런 시 리믹스 유지)
+# -------------------------
+if "remix_bytes" not in st.session_state:
+    st.session_state.remix_bytes = None
+if "remix_bpm" not in st.session_state:
+    st.session_state.remix_bpm = None
+if "remix_source" not in st.session_state:
+    st.session_state.remix_source = None
+
+# -------------------------
 # 업로드
 # -------------------------
 uploaded = st.file_uploader(
@@ -237,6 +247,11 @@ uploaded = st.file_uploader(
 # 실행
 # -------------------------
 if uploaded:
+    if st.session_state.remix_source != uploaded.name:
+        st.session_state.remix_bytes = None
+        st.session_state.remix_bpm = None
+        st.session_state.remix_source = uploaded.name
+
     st.audio(uploaded)
 
     if st.button("Generate Remix"):
@@ -276,6 +291,7 @@ if uploaded:
         # 임시 파일 저장
         # -------------------------
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
+            uploaded.seek(0)
             tmp.write(uploaded.read())
             temp_path = tmp.name
 
@@ -283,7 +299,6 @@ if uploaded:
         # BPM 분석
         # -------------------------
         bpm, beat_times = analyze_bpm(temp_path)
-        st.write(f"Detected BPM: {bpm}")
 
         # -------------------------
         # 오디오 로드
@@ -418,13 +433,21 @@ if uploaded:
             format="mp3"
         )
 
+        with open(output_path, "rb") as f:
+            st.session_state.remix_bytes = f.read()
+        st.session_state.remix_bpm = bpm
+
+    if st.session_state.remix_bytes:
+        if st.session_state.remix_bpm is not None:
+            st.write(f"Detected BPM: {st.session_state.remix_bpm}")
+
         st.success("Remix Complete!")
 
-        st.audio(output_path)
+        st.audio(st.session_state.remix_bytes, format="audio/mp3")
 
-        with open(output_path, "rb") as f:
-            st.download_button(
-                "⬇ Download Remix",
-                f,
-                file_name="pacoel_speedcore_remix.mp3"
-            )
+        st.download_button(
+            "⬇ Download Remix",
+            st.session_state.remix_bytes,
+            file_name="pacoel_speedcore_remix.mp3",
+            mime="audio/mpeg",
+        )

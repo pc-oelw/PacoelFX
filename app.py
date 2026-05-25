@@ -1,6 +1,6 @@
 import streamlit as st
 from pydub import AudioSegment
-from pydub.effects import speedup, high_pass_filter
+from pydub.effects import speedup, high_pass_filter, low_pass_filter
 import librosa
 import numpy as np
 import tempfile
@@ -10,7 +10,7 @@ import requests
 import replicate
 
 # -------------------------
-# 페이지 설정
+# Page config
 # -------------------------
 st.set_page_config(
     page_title="Pacoel Wave",
@@ -19,7 +19,7 @@ st.set_page_config(
 )
 
 # -------------------------
-# Replicate API 토큰
+# Replicate token
 # -------------------------
 try:
     os.environ["REPLICATE_API_TOKEN"] = st.secrets["REPLICATE_API_TOKEN"]
@@ -57,6 +57,14 @@ st.markdown("""
     box-shadow: 0px 4px 15px rgba(0,0,0,0.05);
 }
 
+.command-box {
+    background: white;
+    padding: 20px;
+    border-radius: 18px;
+    margin-bottom: 25px;
+    box-shadow: 0px 4px 15px rgba(0,0,0,0.05);
+}
+
 .stButton button {
     background-color: black;
     color: white;
@@ -81,7 +89,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------
-# 제목
+# Header
 # -------------------------
 st.markdown(
     '<div class="main-title">🎵 Pacoel Wave</div>',
@@ -89,22 +97,22 @@ st.markdown(
 )
 
 st.markdown(
-    '<div class="sub-title">Generative AI Speedcore Remix Engine</div>',
+    '<div class="sub-title">Command-Based Generative AI Remix Engine</div>',
     unsafe_allow_html=True
 )
 
 st.markdown("""
 <div class="info-box">
 
-Upload a song. Pacoel Wave analyzes its BPM and structure,
-then uses generative AI to create a new J-core / speedcore-style drop
-and blends it into your track.
+Upload a song, write remix commands, and Pacoel Wave will send
+part of your track to generative AI so the new intro layer and drop
+are based on the original song instead of being random.
 
 </div>
 """, unsafe_allow_html=True)
 
 # -------------------------
-# 드럼 파일 로드
+# Drum samples
 # -------------------------
 def load_sound(path):
     if os.path.exists(path):
@@ -118,7 +126,7 @@ hihat = load_sound("sounds/hihat.wav")
 
 
 # -------------------------
-# 안전한 speedup
+# Safe speedup
 # -------------------------
 def safe_speedup(audio, playback_speed):
     if playback_speed <= 1.01:
@@ -136,7 +144,7 @@ def safe_speedup(audio, playback_speed):
 
 
 # -------------------------
-# BPM / 에너지 분석
+# Audio analysis
 # -------------------------
 def analyze_audio(file_path):
     y, sr = librosa.load(
@@ -179,7 +187,28 @@ def analyze_audio(file_path):
 
 
 # -------------------------
-# 드랍 위치 찾기
+# Nearest beat
+# -------------------------
+def nearest_beat_ms(target_ms, beat_ms):
+    if not beat_ms:
+        return target_ms
+
+    nearby = [
+        b for b in beat_ms
+        if abs(b - target_ms) < 2200
+    ]
+
+    if not nearby:
+        return target_ms
+
+    return min(
+        nearby,
+        key=lambda x: abs(x - target_ms)
+    )
+
+
+# -------------------------
+# Drop point detection
 # -------------------------
 def find_drop_point_ms(total_ms, rms, rms_times, beat_ms):
     if len(rms) < 10:
@@ -190,13 +219,13 @@ def find_drop_point_ms(total_ms, rms, rms_times, beat_ms):
 
     candidates = []
 
-    for i in range(4, len(rms)):
+    for i in range(5, len(rms)):
         t = rms_times[i]
 
         if t < start_sec or t > end_sec:
             continue
 
-        before = np.mean(rms[max(0, i - 4):i])
+        before = np.mean(rms[max(0, i - 5):i])
         now = rms[i]
         rise = now - before
 
@@ -208,17 +237,10 @@ def find_drop_point_ms(total_ms, rms, rms_times, beat_ms):
         candidates.sort(reverse=True)
         drop_ms = int(candidates[0][1] * 1000)
 
-    if beat_ms:
-        nearby = [
-            b for b in beat_ms
-            if abs(b - drop_ms) < 2000
-        ]
-
-        if nearby:
-            drop_ms = min(
-                nearby,
-                key=lambda x: abs(x - drop_ms)
-            )
+    drop_ms = nearest_beat_ms(
+        drop_ms,
+        beat_ms
+    )
 
     drop_ms = max(
         int(total_ms * 0.42),
@@ -229,43 +251,143 @@ def find_drop_point_ms(total_ms, rms, rms_times, beat_ms):
 
 
 # -------------------------
-# AI 프롬프트 만들기
+# Parse user command
 # -------------------------
-def make_ai_prompt(bpm):
-    if bpm < 100:
-        target_bpm = 230
-    elif bpm < 135:
-        target_bpm = 240
-    else:
+def parse_command(user_command, detected_bpm):
+    command = user_command.lower() if user_command else ""
+
+    target_bpm = 240
+
+    # /bpm 250 같은 명령어 감지
+    words = command.replace("/", " ").replace(":", " ").split()
+
+    for i, word in enumerate(words):
+        if word == "bpm" and i + 1 < len(words):
+            try:
+                target_bpm = int(words[i + 1])
+            except Exception:
+                pass
+
+    target_bpm = max(
+        180,
+        min(target_bpm, 280)
+    )
+
+    if "260" in command:
+        target_bpm = 260
+    elif "250" in command:
         target_bpm = 250
+    elif "240" in command:
+        target_bpm = 240
+    elif "220" in command:
+        target_bpm = 220
+
+    if "sudden" in command or "갑자기" in command:
+        drop_type = "sudden explosive drop"
+    elif "smooth" in command or "자연" in command:
+        drop_type = "smooth build into a fast drop"
+    else:
+        drop_type = "sudden tempo-switch drop"
+
+    if "glitch" in command or "글리치" in command:
+        intro_type = "glitchy chopped intro texture"
+    elif "dark" in command or "어둡" in command:
+        intro_type = "dark electronic intro texture"
+    elif "cute" in command or "귀여" in command:
+        intro_type = "bright cute arcade synth intro texture"
+    else:
+        intro_type = "bright arcade electronic intro texture"
+
+    if "hard" in command or "distorted" in command or "강" in command:
+        kick_type = "heavy distorted hardcore kicks"
+    else:
+        kick_type = "fast clean hardcore kicks"
+
+    cleaned_command = command.replace("/", ", ")
+
+    return {
+        "target_bpm": target_bpm,
+        "drop_type": drop_type,
+        "intro_type": intro_type,
+        "kick_type": kick_type,
+        "raw": cleaned_command
+    }
+
+
+# -------------------------
+# Prompt builders
+# -------------------------
+def make_intro_prompt(command_info):
+    prompt = (
+        f"{command_info['intro_type']}, "
+        "short remix intro layer, energetic rhythm game electronic style, "
+        "bright synths, chopped melodic texture, no vocals, instrumental, "
+        "designed to layer under the original song, clean mix"
+    )
+
+    if command_info["raw"]:
+        prompt += ", user direction: " + command_info["raw"]
+
+    return prompt
+
+
+def make_drop_prompt(command_info):
+    target_bpm = command_info["target_bpm"]
 
     prompt = (
         f"chaotic J-core speedcore drop, {target_bpm} BPM, "
-        "aggressive distorted kicks, rapid drum fills, bright arcade synth leads, "
-        "sudden tempo switch, rhythm game boss song energy, intense electronic drop, "
-        "hyper energetic, clean mix, instrumental, no vocals"
+        f"{command_info['drop_type']}, {command_info['kick_type']}, "
+        "rapid drum fills, bright arcade synth leads, rhythm game boss song energy, "
+        "hyper energetic electronic drop, intense but clean mix, instrumental, no vocals, "
+        "melody should follow the input audio"
     )
 
-    return prompt, target_bpm
+    if command_info["raw"]:
+        prompt += ", user direction: " + command_info["raw"]
+
+    return prompt
 
 
 # -------------------------
-# Replicate MusicGen 호출
+# Export segment to temp file
 # -------------------------
-def generate_ai_music(prompt, duration=18):
-    output = replicate.run(
-        "meta/musicgen",
-        input={
-            "prompt": prompt,
-            "duration": duration,
-            "model_version": "stereo-large",
-            "output_format": "mp3",
-            "temperature": 1.05,
-            "classifier_free_guidance": 4
-        }
+def export_segment(segment, suffix=".wav"):
+    temp_file = tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix=suffix
     )
 
-    # Replicate 출력이 list일 수도 있고 string/url일 수도 있음
+    segment.export(
+        temp_file.name,
+        format=suffix.replace(".", "")
+    )
+
+    temp_file.close()
+
+    return temp_file.name
+
+
+# -------------------------
+# Replicate MusicGen call
+# -------------------------
+def generate_ai_audio(prompt, input_audio_path, duration=12, continuation=False):
+    with open(input_audio_path, "rb") as audio_file:
+        output = replicate.run(
+            "meta/musicgen",
+            input={
+                "model_version": "stereo-melody-large",
+                "prompt": prompt,
+                "input_audio": audio_file,
+                "duration": duration,
+                "continuation": continuation,
+                "output_format": "mp3",
+                "temperature": 1.15,
+                "classifier_free_guidance": 5,
+                "top_k": 250,
+                "top_p": 0
+            }
+        )
+
     if isinstance(output, list):
         output_url = output[0]
     else:
@@ -275,51 +397,61 @@ def generate_ai_music(prompt, duration=18):
 
 
 # -------------------------
-# URL에서 AI 오디오 다운로드
+# Download generated audio
 # -------------------------
 def download_ai_audio(url):
     response = requests.get(
         url,
-        timeout=120
+        timeout=180
     )
 
     if response.status_code != 200:
         raise RuntimeError("Failed to download AI audio.")
 
-    temp_ai = tempfile.NamedTemporaryFile(
+    temp_audio = tempfile.NamedTemporaryFile(
         delete=False,
         suffix=".mp3"
     )
 
-    temp_ai.write(response.content)
-    temp_ai.close()
+    temp_audio.write(response.content)
+    temp_audio.close()
 
-    return temp_ai.name
+    return temp_audio.name
 
 
 # -------------------------
-# 인트로 변형
+# Intro processing
 # -------------------------
-def process_intro(audio, bpm):
-    intro = audio.fade_in(350)
+def process_intro(original_intro, ai_intro_layer, bpm):
+    intro = original_intro.fade_in(300)
     intro = high_pass_filter(intro, 35)
 
-    # 초반도 약간 바뀌게 약한 하이햇과 킥 추가
-    beat_ms = int(60000 / max(80, bpm))
+    # AI intro layer를 작게 깔아서 초반도 확실히 변하게 함
+    if ai_intro_layer:
+        ai_layer = ai_intro_layer[:len(intro)]
+        ai_layer = ai_layer - 9
+        ai_layer = high_pass_filter(ai_layer, 120)
 
-    start = int(len(intro) * 0.35)
-    end = len(intro) - 1000
+        intro = intro.overlay(
+            ai_layer,
+            position=0
+        )
+
+    # 뒤쪽에 아주 약한 리듬 추가
+    beat_ms = int(60000 / max(80, bpm))
+    start = int(len(intro) * 0.45)
+    end = len(intro) - 900
 
     for pos in range(start, max(start, end), beat_ms * 2):
         if hihat:
             intro = intro.overlay(
-                hihat - 21,
+                hihat - 22,
                 position=pos + beat_ms // 2
             )
 
-        if kick and pos > len(intro) * 0.65:
+        if kick and pos > len(intro) * 0.70:
             intro = intro.overlay(
-                kick - 12,
+                kick - 13,
                 position=pos
             )
 
@@ -327,21 +459,27 @@ def process_intro(audio, bpm):
 
 
 # -------------------------
-# 빌드업 처리
+# Build-up processing
 # -------------------------
-def process_buildup(audio, bpm):
-    if len(audio) < 4000:
-        return audio
+def process_build(build, bpm):
+    if len(build) < 4000:
+        return build
 
     parts = 4
-    part_len = len(audio) // parts
+    part_len = len(build) // parts
 
-    speeds = [1.00, 1.03, 1.06, 1.10]
+    speeds = [1.00, 1.03, 1.07, 1.12]
     result = AudioSegment.empty()
 
     for i in range(parts):
-        chunk = audio[i * part_len:(i + 1) * part_len]
-        chunk = safe_speedup(chunk, speeds[i])
+        chunk = build[i * part_len:(i + 1) * part_len]
+
+        chunk = safe_speedup(
+            chunk,
+            speeds[i]
+        )
+
+        # 점점 커지게
         chunk = chunk + i
 
         if len(result) == 0:
@@ -353,18 +491,20 @@ def process_buildup(audio, bpm):
             )
 
     beat_ms = int(60000 / max(90, bpm))
-    end_limit = len(result) - 700
+    end_limit = len(result) - 800
 
     for pos in range(0, max(0, end_limit), beat_ms):
+        # 빌드업 하이햇
         if hihat:
             result = result.overlay(
-                hihat - 17,
+                hihat - 18,
                 position=pos + beat_ms // 2
             )
 
-        if kick and pos > len(result) * 0.45 and pos % (beat_ms * 2) == 0:
+        # 뒤쪽에만 킥
+        if kick and pos > len(result) * 0.50 and pos % (beat_ms * 2) == 0:
             result = result.overlay(
-                kick - 9,
+                kick - 10,
                 position=pos
             )
 
@@ -372,17 +512,15 @@ def process_buildup(audio, bpm):
 
 
 # -------------------------
-# AI 드랍 후처리
+# AI drop processing
 # -------------------------
-def process_ai_drop(ai_audio, target_bpm):
-    drop = ai_audio
-
-    # 너무 작거나 밋밋하면 살짝 강화
-    drop = drop + 2
+def process_ai_drop(ai_drop, target_bpm):
+    drop = ai_drop + 2
 
     beat_ms = int(60000 / target_bpm)
     kick_interval = max(95, beat_ms // 2)
 
+    # 끝까지 드럼 넣지 않음
     end_limit = len(drop) - 1500
 
     for pos in range(0, max(0, end_limit), kick_interval):
@@ -394,15 +532,24 @@ def process_ai_drop(ai_audio, target_bpm):
 
         if hihat and pos % (kick_interval * 2) == 0:
             drop = drop.overlay(
-                hihat - 10,
+                hihat - 11,
                 position=pos + 25
             )
 
         if snare and pos % (kick_interval * 4) == 0:
             drop = drop.overlay(
-                snare - 6,
+                snare - 7,
                 position=pos + 60
             )
+
+        # 더블킥 포인트
+        if kick and pos % (kick_interval * 8) == 0:
+            extra = pos + int(kick_interval * 0.55)
+            if extra < end_limit:
+                drop = drop.overlay(
+                    kick - 2,
+                    position=extra
+                )
 
     drop = drop.fade_in(80)
     drop = drop.fade_out(1200)
@@ -411,7 +558,22 @@ def process_ai_drop(ai_audio, target_bpm):
 
 
 # -------------------------
-# 세션 상태
+# Fallback drop
+# -------------------------
+def fallback_drop(source_audio, target_bpm):
+    drop = safe_speedup(
+        source_audio,
+        1.15
+    )
+
+    return process_ai_drop(
+        drop,
+        target_bpm
+    )
+
+
+# -------------------------
+# Session state
 # -------------------------
 if "remix_bytes" not in st.session_state:
     st.session_state.remix_bytes = None
@@ -430,16 +592,30 @@ if "remix_source" not in st.session_state:
 
 
 # -------------------------
-# 업로드
+# UI
 # -------------------------
 uploaded = st.file_uploader(
     "Upload Audio",
     type=["mp3", "wav"]
 )
 
-# -------------------------
-# 실행
-# -------------------------
+st.markdown('<div class="command-box">', unsafe_allow_html=True)
+
+user_command = st.text_area(
+    "AI Remix Command",
+    placeholder="""예시:
+/style chaotic j-core speedcore
+/bpm 250
+/drop sudden tempo switch
+/intro glitchy chopped melody
+/kick heavy distorted hardcore kick
+/vibe rhythm game boss song
+""",
+    height=150
+)
+
+st.markdown("</div>", unsafe_allow_html=True)
+
 if uploaded:
     if st.session_state.remix_source != uploaded.name:
         st.session_state.remix_bytes = None
@@ -452,10 +628,10 @@ if uploaded:
 
     if not REPLICATE_READY:
         st.warning(
-            "REPLICATE_API_TOKEN is missing. Add it in Streamlit Secrets first."
+            "REPLICATE_API_TOKEN이 아직 설정되지 않았어. Streamlit Secrets에 먼저 넣어야 해."
         )
 
-    if st.button("Generate Generative AI Remix"):
+    if st.button("Generate Command AI Remix"):
         if not REPLICATE_READY:
             st.error("Replicate API token is not set.")
             st.stop()
@@ -466,13 +642,13 @@ if uploaded:
         steps = [
             "Uploading audio...",
             "Analyzing BPM and energy...",
-            "Finding drop point...",
-            "Creating AI prompt...",
-            "Generating AI speedcore drop...",
-            "Downloading AI audio...",
-            "Creating intro variation...",
-            "Creating build-up...",
-            "Blending AI drop...",
+            "Finding musical drop point...",
+            "Reading remix command...",
+            "Preparing original audio reference...",
+            "Generating AI intro layer...",
+            "Generating AI melody-based drop...",
+            "Processing build-up...",
+            "Blending remix sections...",
             "Finalizing remix..."
         ]
 
@@ -486,23 +662,23 @@ if uploaded:
                 status.write(steps[1])
             elif i < 28:
                 status.write(steps[2])
-            elif i < 35:
+            elif i < 36:
                 status.write(steps[3])
-            elif i < 60:
+            elif i < 44:
                 status.write(steps[4])
-            elif i < 68:
+            elif i < 58:
                 status.write(steps[5])
             elif i < 76:
                 status.write(steps[6])
             elif i < 86:
                 status.write(steps[7])
-            elif i < 95:
+            elif i < 96:
                 status.write(steps[8])
             else:
                 status.write(steps[9])
 
         # -------------------------
-        # 임시 저장
+        # Save upload
         # -------------------------
         file_ext = os.path.splitext(uploaded.name)[1]
 
@@ -515,7 +691,7 @@ if uploaded:
             temp_path = tmp.name
 
         # -------------------------
-        # 분석
+        # Analyze
         # -------------------------
         bpm, beat_ms, rms, rms_times = analyze_audio(temp_path)
 
@@ -534,28 +710,21 @@ if uploaded:
             beat_ms
         )
 
-        intro_target = int(drop_start * 0.45)
-        intro_end = intro_target
+        # intro는 너무 길게 두지 않음
+        intro_target = int(drop_start * 0.42)
 
-        if beat_ms:
-            nearby_intro = [
-                b for b in beat_ms
-                if abs(b - intro_target) < 2000
-            ]
-
-            if nearby_intro:
-                intro_end = min(
-                    nearby_intro,
-                    key=lambda x: abs(x - intro_target)
-                )
+        intro_end = nearest_beat_ms(
+            intro_target,
+            beat_ms
+        )
 
         intro_end = max(
-            5000,
-            min(intro_end, int(total * 0.35))
+            4500,
+            min(intro_end, int(total * 0.32))
         )
 
         drop_start = max(
-            intro_end + 6000,
+            intro_end + 7000,
             drop_start
         )
 
@@ -566,65 +735,134 @@ if uploaded:
 
         intro = original_audio[:intro_end]
         build = original_audio[intro_end:drop_start]
+        original_drop_ref = original_audio[drop_start:]
 
         # -------------------------
-        # AI 생성
+        # Command
         # -------------------------
-        prompt, target_bpm = make_ai_prompt(bpm)
+        command_info = parse_command(
+            user_command,
+            bpm
+        )
 
-        status.write("Generating AI speedcore drop...")
+        target_bpm = command_info["target_bpm"]
+
+        intro_prompt = make_intro_prompt(
+            command_info
+        )
+
+        drop_prompt = make_drop_prompt(
+            command_info
+        )
+
+        # -------------------------
+        # Reference audio for AI
+        # -------------------------
+        intro_ref = original_audio[:min(len(original_audio), 9000)]
+
+        build_ref_start = max(
+            0,
+            drop_start - 12000
+        )
+
+        build_ref = original_audio[
+            build_ref_start:drop_start
+        ]
+
+        if len(build_ref) < 4000:
+            build_ref = original_audio[:min(len(original_audio), 12000)]
+
+        intro_ref_path = export_segment(
+            intro_ref,
+            suffix=".wav"
+        )
+
+        build_ref_path = export_segment(
+            build_ref,
+            suffix=".wav"
+        )
+
+        # -------------------------
+        # AI generate
+        # -------------------------
+        ai_success = False
+        ai_intro_layer = None
 
         try:
-            ai_url = generate_ai_music(
-                prompt,
-                duration=18
+            status.write("Generating AI intro layer from your song...")
+
+            intro_url = generate_ai_audio(
+                intro_prompt,
+                intro_ref_path,
+                duration=8,
+                continuation=False
             )
 
-            status.write("Downloading AI audio...")
+            intro_ai_path = download_ai_audio(
+                intro_url
+            )
 
-            ai_path = download_ai_audio(ai_url)
+            ai_intro_layer = AudioSegment.from_file(
+                intro_ai_path
+            )
 
-            ai_audio = AudioSegment.from_file(ai_path)
+            status.write("Generating melody-based AI speedcore drop...")
+
+            drop_url = generate_ai_audio(
+                drop_prompt,
+                build_ref_path,
+                duration=18,
+                continuation=False
+            )
+
+            drop_ai_path = download_ai_audio(
+                drop_url
+            )
+
+            ai_drop = AudioSegment.from_file(
+                drop_ai_path
+            )
 
             ai_drop = process_ai_drop(
-                ai_audio,
+                ai_drop,
                 target_bpm
             )
 
             ai_success = True
 
         except Exception as e:
-            st.warning("AI generation failed. Using fallback speedcore drop.")
+            st.warning("AI generation failed. Using fallback remix mode.")
             st.caption(str(e))
 
-            fallback = original_audio[drop_start:]
-            fallback = safe_speedup(fallback, 1.18)
-            ai_drop = process_ai_drop(
-                fallback,
+            ai_intro_layer = None
+
+            ai_drop = fallback_drop(
+                original_drop_ref,
                 target_bpm
             )
 
             ai_success = False
 
         # -------------------------
-        # 인트로 / 빌드업
+        # Local processing
         # -------------------------
         intro = process_intro(
             intro,
+            ai_intro_layer,
             bpm
         )
 
-        build = process_buildup(
+        build = process_build(
             build,
             bpm
         )
 
         pre_drop = AudioSegment.silent(
-            duration=250
+            duration=240
         )
 
         # -------------------------
-        # 합치기
+        # Combine
         # -------------------------
         remix = intro.append(
             build,
@@ -638,12 +876,21 @@ if uploaded:
 
         remix = remix.append(
             ai_drop,
-            crossfade=80
+            crossfade=90
         )
 
-        remix = remix.fade_out(1000)
+        remix = remix.fade_out(1200)
 
-        output_path = "pacoel_generative_ai_speedcore_remix.mp3"
+        # 너무 길어지는 것 방지
+        max_len = len(original_audio) + 4000
+
+        if len(remix) > max_len:
+            remix = remix[:max_len]
+
+        # -------------------------
+        # Export
+        # -------------------------
+        output_path = "pacoel_command_ai_remix.mp3"
 
         remix.export(
             output_path,
@@ -659,12 +906,12 @@ if uploaded:
 
     if st.session_state.remix_bytes:
         st.write(f"Detected BPM: {st.session_state.remix_bpm}")
-        st.write(f"AI Drop Target BPM: {st.session_state.drop_bpm}")
+        st.write(f"AI Target Drop BPM: {st.session_state.drop_bpm}")
 
         if st.session_state.ai_used:
-            st.success("Generative AI drop was used.")
+            st.success("Generative AI used your audio as a reference.")
         else:
-            st.info("Fallback drop was used.")
+            st.info("Fallback remix mode was used.")
 
         st.success("Remix Complete!")
 
@@ -676,6 +923,6 @@ if uploaded:
         st.download_button(
             "⬇ Download Remix",
             st.session_state.remix_bytes,
-            file_name="pacoel_generative_ai_speedcore_remix.mp3",
+            file_name="pacoel_command_ai_remix.mp3",
             mime="audio/mpeg",
         )

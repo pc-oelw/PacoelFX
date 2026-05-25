@@ -19,15 +19,6 @@ st.set_page_config(
 )
 
 # -------------------------
-# Replicate token
-# -------------------------
-try:
-    os.environ["REPLICATE_API_TOKEN"] = st.secrets["REPLICATE_API_TOKEN"]
-    REPLICATE_READY = True
-except Exception:
-    REPLICATE_READY = False
-
-# -------------------------
 # CSS
 # -------------------------
 st.markdown("""
@@ -130,16 +121,16 @@ st.markdown(
 )
 
 st.markdown(
-    '<div class="sub-title">Command-Based Generative AI Remix Engine</div>',
+    '<div class="sub-title">Free Hugging Face Command AI Remix Engine</div>',
     unsafe_allow_html=True
 )
 
 st.markdown("""
 <div class="info-box">
 
-Upload a song, write remix commands, and Pacoel Wave will send
-part of your track to generative AI so the new intro layer and drop
-are based on the original song instead of being random.
+Upload a song, write remix commands, and Pacoel Wave will use
+a free Hugging Face MusicGen Space to generate an intro layer
+and a new drop based on your original audio reference.
 
 </div>
 """, unsafe_allow_html=True)
@@ -156,6 +147,14 @@ def load_sound(path):
 kick = load_sound("sounds/kick.wav")
 snare = load_sound("sounds/snare.wav")
 hihat = load_sound("sounds/hihat.wav")
+
+
+# -------------------------
+# Hugging Face client
+# -------------------------
+@st.cache_resource
+def get_hf_client():
+    return Client("facebook/MusicGen")
 
 
 # -------------------------
@@ -286,7 +285,7 @@ def find_drop_point_ms(total_ms, rms, rms_times, beat_ms):
 # -------------------------
 # Parse user command
 # -------------------------
-def parse_command(user_command, detected_bpm):
+def parse_command(user_command):
     command = user_command.lower() if user_command else ""
 
     target_bpm = 240
@@ -357,7 +356,7 @@ def make_intro_prompt(command_info):
     prompt = (
         f"{command_info['intro_type']}, "
         "short remix intro layer, energetic rhythm game electronic style, "
-        "bright synths, chopped melodic texture, no vocals, instrumental, "
+        "bright synths, chopped melodic texture, instrumental, no vocals, "
         "designed to layer under the original song, clean mix"
     )
 
@@ -404,20 +403,23 @@ def export_segment(segment, suffix=".wav"):
 
 
 # -------------------------
-# Replicate MusicGen call
+# Hugging Face MusicGen call
 # -------------------------
-def generate_ai_audio(prompt, input_audio_path, duration=12, continuation=False):
+def generate_ai_audio(prompt, input_audio_path, duration=12):
     try:
-        client = Client("facebook/MusicGen")
+        client = get_hf_client()
 
         result = client.predict(
-            text=prompt,
-            melody=handle_file(input_audio_path),
-            duration=duration,
-            topk=250,
-            topp=0,
-            temperature=1.0,
-            cfg_coef=4,
+            "facebook/musicgen-stereo-melody",
+            "",
+            "Default",
+            prompt,
+            handle_file(input_audio_path),
+            duration,
+            250,
+            0,
+            1.0,
+            4,
             api_name="/predict_full"
         )
 
@@ -428,59 +430,59 @@ def generate_ai_audio(prompt, input_audio_path, duration=12, continuation=False)
 
 
 # -------------------------
-# Download generated audio
+# Extract generated audio path
 # -------------------------
 def download_ai_audio(output):
-    # Gradio가 tuple/list로 결과를 주는 경우 처리
+    candidates = []
+
     if isinstance(output, tuple) or isinstance(output, list):
-        possible_file = output[0]
+        candidates.extend(list(output))
     else:
-        possible_file = output
+        candidates.append(output)
 
-    # 파일 경로가 바로 오는 경우
-    if isinstance(possible_file, str) and os.path.exists(possible_file):
-        return possible_file
+    for item in candidates:
+        if isinstance(item, str) and os.path.exists(item):
+            return item
 
-    # URL이 오는 경우
-    if isinstance(possible_file, str) and possible_file.startswith("http"):
-        response = requests.get(
-            possible_file,
-            timeout=180
-        )
+        if isinstance(item, dict):
+            if "path" in item and os.path.exists(item["path"]):
+                return item["path"]
 
-        if response.status_code != 200:
-            raise RuntimeError("Failed to download Hugging Face audio.")
+            if "name" in item and os.path.exists(item["name"]):
+                return item["name"]
 
-        temp_audio = tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=".mp3"
-        )
+            if "url" in item:
+                url = item["url"]
+                temp_audio = tempfile.NamedTemporaryFile(
+                    delete=False,
+                    suffix=".wav"
+                )
 
-        temp_audio.write(response.content)
-        temp_audio.close()
+                response = requests.get(
+                    url,
+                    timeout=180
+                )
 
-        return temp_audio.name
+                if response.status_code == 200:
+                    temp_audio.write(response.content)
+                    temp_audio.close()
+                    return temp_audio.name
 
-    # dict 형태로 오는 경우
-    if isinstance(possible_file, dict):
-        if "path" in possible_file:
-            return possible_file["path"]
+        if isinstance(item, str) and item.startswith("http"):
+            temp_audio = tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=".wav"
+            )
 
-        if "url" in possible_file:
             response = requests.get(
-                possible_file["url"],
+                item,
                 timeout=180
             )
 
-            temp_audio = tempfile.NamedTemporaryFile(
-                delete=False,
-                suffix=".mp3"
-            )
-
-            temp_audio.write(response.content)
-            temp_audio.close()
-
-            return temp_audio.name
+            if response.status_code == 200:
+                temp_audio.write(response.content)
+                temp_audio.close()
+                return temp_audio.name
 
     raise RuntimeError(f"Unknown Hugging Face output format: {output}")
 
@@ -492,10 +494,10 @@ def process_intro(original_intro, ai_intro_layer, bpm):
     intro = original_intro.fade_in(300)
     intro = high_pass_filter(intro, 35)
 
-    # AI intro layer를 작게 깔아서 초반도 확실히 변하게 함
+    # AI layer를 초반에 깔아서 변화가 확실히 느껴지게 함
     if ai_intro_layer:
         ai_layer = ai_intro_layer[:len(intro)]
-        ai_layer = ai_layer - 7
+        ai_layer = ai_layer - 6
         ai_layer = high_pass_filter(ai_layer, 120)
 
         intro = intro.overlay(
@@ -504,7 +506,7 @@ def process_intro(original_intro, ai_intro_layer, bpm):
         )
 
     beat_ms = int(60000 / max(80, bpm))
-    start = int(len(intro) * 0.35)
+    start = int(len(intro) * 0.30)
     end = len(intro) - 900
 
     for pos in range(start, max(start, end), beat_ms * 2):
@@ -514,9 +516,9 @@ def process_intro(original_intro, ai_intro_layer, bpm):
                 position=pos + beat_ms // 2
             )
 
-        if kick and pos > len(intro) * 0.70:
+        if kick and pos > len(intro) * 0.62:
             intro = intro.overlay(
-                kick - 13,
+                kick - 12,
                 position=pos
             )
 
@@ -690,16 +692,7 @@ if uploaded:
 
     st.audio(uploaded)
 
-    if not REPLICATE_READY:
-        st.warning(
-            "REPLICATE_API_TOKEN이 아직 설정되지 않았어. Streamlit Secrets에 먼저 넣어야 해."
-        )
-
-    if st.button("Generate Command AI Remix"):
-        if not REPLICATE_READY:
-            st.error("Replicate API token is not set.")
-            st.stop()
-
+    if st.button("Generate Free AI Remix"):
         progress = st.progress(0)
         status = st.empty()
 
@@ -709,8 +702,8 @@ if uploaded:
             "Finding musical drop point...",
             "Reading remix command...",
             "Preparing original audio reference...",
-            "Generating AI intro layer...",
-            "Generating AI melody-based drop...",
+            "Generating AI intro layer on Hugging Face...",
+            "Generating AI melody-based drop on Hugging Face...",
             "Processing build-up...",
             "Blending remix sections...",
             "Finalizing remix..."
@@ -795,8 +788,7 @@ if uploaded:
         original_drop_ref = original_audio[drop_start:]
 
         command_info = parse_command(
-            user_command,
-            bpm
+            user_command
         )
 
         target_bpm = command_info["target_bpm"]
@@ -843,8 +835,7 @@ if uploaded:
             intro_output = generate_ai_audio(
                 intro_prompt,
                 intro_ref_path,
-                duration=8,
-                continuation=False
+                duration=8
             )
 
             intro_ai_path = download_ai_audio(
@@ -860,8 +851,7 @@ if uploaded:
             drop_output = generate_ai_audio(
                 drop_prompt,
                 build_ref_path,
-                duration=18,
-                continuation=False
+                duration=15
             )
 
             drop_ai_path = download_ai_audio(
@@ -931,7 +921,7 @@ if uploaded:
         if len(remix) > max_len:
             remix = remix[:max_len]
 
-        output_path = "pacoel_command_ai_remix.mp3"
+        output_path = "pacoel_free_ai_remix.mp3"
 
         remix.export(
             output_path,
@@ -951,7 +941,7 @@ if uploaded:
         st.write(f"AI Target Drop BPM: {st.session_state.drop_bpm}")
 
         if st.session_state.ai_used:
-            st.success("Generative AI used your audio as a reference.")
+            st.success("Free Hugging Face MusicGen was used.")
         else:
             st.info("Fallback remix mode was used.")
 
@@ -968,6 +958,6 @@ if uploaded:
         st.download_button(
             "⬇ Download Remix",
             st.session_state.remix_bytes,
-            file_name="pacoel_command_ai_remix.mp3",
+            file_name="pacoel_free_ai_remix.mp3",
             mime="audio/mpeg",
         )

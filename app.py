@@ -106,16 +106,16 @@ st.markdown(
 )
 
 st.markdown(
-    '<div class="sub-title">Full 8-Bit Audio Converter</div>',
+    '<div class="sub-title">Sharp 8-Bit Audio Converter</div>',
     unsafe_allow_html=True
 )
 
 st.markdown("""
 <div class="info-box">
 
-Upload a song and Pacoel Wave will convert the whole track into a retro 8-bit style.
-This version does not use AI and does not add random new melodies.
-It transforms the entire audio using bitcrush, sample-rate reduction, and retro compression.
+Upload a song and convert the whole track into a sharper retro 8-bit style.
+This version avoids the muffled sound by keeping more high frequencies
+and adding digital crunch instead of simply cutting the audio.
 
 </div>
 """, unsafe_allow_html=True)
@@ -134,7 +134,7 @@ if "convert_info" not in st.session_state:
 
 
 # -------------------------
-# Audio processing helpers
+# Audio helpers
 # -------------------------
 def audiosegment_to_numpy(audio):
     audio = audio.set_sample_width(2)
@@ -168,6 +168,7 @@ def bit_depth_reduce(audio, bits=8):
     samples, frame_rate, channels = audiosegment_to_numpy(audio)
 
     max_amp = 32767.0
+
     levels = 2 ** bits
 
     reduced = np.round(
@@ -181,21 +182,21 @@ def bit_depth_reduce(audio, bits=8):
     )
 
 
-def downsample_retro(audio, target_rate=11025):
+def sample_rate_reduce(audio, target_rate=12000):
     original_rate = audio.frame_rate
 
-    crushed = audio.set_frame_rate(
+    reduced = audio.set_frame_rate(
         target_rate
     )
 
-    crushed = crushed.set_frame_rate(
+    restored = reduced.set_frame_rate(
         original_rate
     )
 
-    return crushed
+    return restored
 
 
-def add_retro_grit(audio, amount=0.015):
+def add_digital_noise(audio, amount=0.006):
     samples, frame_rate, channels = audiosegment_to_numpy(audio)
 
     noise = np.random.uniform(
@@ -204,25 +205,29 @@ def add_retro_grit(audio, amount=0.015):
         samples.shape
     ) * 32767 * amount
 
-    gritty = samples + noise
+    result = samples + noise
 
     return numpy_to_audiosegment(
-        gritty,
+        result,
         frame_rate,
         channels
     )
 
 
-def soft_clip(audio, drive=1.4):
+def hard_clip(audio, drive=1.35):
     samples, frame_rate, channels = audiosegment_to_numpy(audio)
 
     normalized = samples / 32767.0
 
-    clipped = np.tanh(
-        normalized * drive
+    driven = normalized * drive
+
+    clipped = np.clip(
+        driven,
+        -0.85,
+        0.85
     )
 
-    output = clipped * 32767.0
+    output = clipped / 0.85 * 32767.0
 
     return numpy_to_audiosegment(
         output,
@@ -231,15 +236,35 @@ def soft_clip(audio, drive=1.4):
     )
 
 
-def retro_filter(audio, mode):
+def add_brightness(original, processed, strength=0.45):
+    # 원본에서 고음 느낌만 약하게 가져와서 먹먹함 방지
+    bright = original.high_pass_filter(3500)
+
+    bright = bright - int(12 - strength * 10)
+
+    result = processed.overlay(
+        bright
+    )
+
+    return result
+
+
+def retro_eq(audio, mode):
+    # 예전 버전처럼 고음을 세게 자르지 않음
     if mode == "Soft":
-        return audio.low_pass_filter(9000).high_pass_filter(40)
+        result = audio.high_pass_filter(35)
+        result = result.low_pass_filter(15500)
+        return result
 
     if mode == "Classic":
-        return audio.low_pass_filter(6500).high_pass_filter(60)
+        result = audio.high_pass_filter(45)
+        result = result.low_pass_filter(13500)
+        return result
 
     if mode == "Extreme":
-        return audio.low_pass_filter(4200).high_pass_filter(90)
+        result = audio.high_pass_filter(65)
+        result = result.low_pass_filter(11500)
+        return result
 
     return audio
 
@@ -247,54 +272,72 @@ def retro_filter(audio, mode):
 def convert_to_8bit(audio, mode):
     audio = audio.set_sample_width(2)
 
+    original = normalize(audio)
+
     if mode == "Soft":
         bits = 8
         sample_rate = 16000
-        noise = 0.004
+        noise = 0.003
         drive = 1.15
+        brightness = 0.35
 
     elif mode == "Classic":
         bits = 7
-        sample_rate = 11025
-        noise = 0.010
+        sample_rate = 12000
+        noise = 0.006
         drive = 1.35
+        brightness = 0.50
 
     else:
-        bits = 5
-        sample_rate = 8000
-        noise = 0.018
-        drive = 1.65
+        bits = 6
+        sample_rate = 9000
+        noise = 0.010
+        drive = 1.55
+        brightness = 0.65
 
-    # 전체 곡을 통째로 8-bit 느낌으로 변환
-    processed = normalize(audio)
+    processed = original
 
-    processed = downsample_retro(
+    # 1. 샘플레이트 낮춰서 레트로 디지털 질감
+    processed = sample_rate_reduce(
         processed,
         target_rate=sample_rate
     )
 
+    # 2. 비트 깊이 감소
     processed = bit_depth_reduce(
         processed,
         bits=bits
     )
 
-    processed = retro_filter(
+    # 3. 먹먹하지 않게 EQ는 약하게
+    processed = retro_eq(
         processed,
         mode
     )
 
-    processed = add_retro_grit(
+    # 4. 디지털 노이즈
+    processed = add_digital_noise(
         processed,
         amount=noise
     )
 
-    processed = soft_clip(
+    # 5. 약한 하드 클리핑으로 게임기 같은 날카로움
+    processed = hard_clip(
         processed,
         drive=drive
     )
 
-    processed = processed.fade_in(200)
-    processed = processed.fade_out(900)
+    # 6. 원곡 고음 일부를 섞어서 먹먹함 방지
+    processed = add_brightness(
+        original,
+        processed,
+        strength=brightness
+    )
+
+    processed = normalize(processed)
+
+    processed = processed.fade_in(120)
+    processed = processed.fade_out(700)
 
     return processed
 
@@ -320,7 +363,7 @@ mode = st.selectbox(
 )
 
 st.write(
-    "Soft = 원곡 보존 / Classic = 게임기 느낌 / Extreme = 강한 8-bit 파괴감"
+    "Soft = 원곡 보존 / Classic = 선명한 8-bit / Extreme = 더 거친 디지털 깨짐"
 )
 
 st.markdown("</div>", unsafe_allow_html=True)
@@ -333,7 +376,7 @@ if uploaded:
 
     st.audio(uploaded)
 
-    if st.button("Convert Whole Song to 8-Bit"):
+    if st.button("Convert Whole Song to Sharp 8-Bit"):
         progress = st.progress(0)
         status = st.empty()
 
@@ -341,27 +384,30 @@ if uploaded:
             "Uploading audio...",
             "Preparing full track...",
             "Reducing sample rate...",
-            "Applying bit depth reduction...",
-            "Adding retro texture...",
+            "Reducing bit depth...",
+            "Adding digital crunch...",
+            "Restoring brightness...",
             "Finalizing 8-bit version..."
         ]
 
         for i in range(101):
-            time.sleep(0.01)
+            time.sleep(0.008)
             progress.progress(i)
 
-            if i < 15:
+            if i < 12:
                 status.write(steps[0])
-            elif i < 30:
+            elif i < 25:
                 status.write(steps[1])
-            elif i < 48:
+            elif i < 40:
                 status.write(steps[2])
-            elif i < 68:
+            elif i < 58:
                 status.write(steps[3])
-            elif i < 88:
+            elif i < 75:
                 status.write(steps[4])
-            else:
+            elif i < 90:
                 status.write(steps[5])
+            else:
+                status.write(steps[6])
 
         file_ext = os.path.splitext(uploaded.name)[1]
 
@@ -384,7 +430,7 @@ if uploaded:
             mode
         )
 
-        output_path = "pacoel_8bit_full_convert.mp3"
+        output_path = "pacoel_sharp_8bit_convert.mp3"
 
         converted.export(
             output_path,
@@ -397,7 +443,7 @@ if uploaded:
         st.session_state.convert_info = mode
 
     if st.session_state.converted_bytes:
-        st.success("8-Bit Conversion Complete!")
+        st.success("Sharp 8-Bit Conversion Complete!")
 
         st.write(f"Mode: {st.session_state.convert_info}")
 
@@ -407,8 +453,8 @@ if uploaded:
         )
 
         st.download_button(
-            "⬇ Download 8-Bit Version",
+            "⬇ Download Sharp 8-Bit Version",
             st.session_state.converted_bytes,
-            file_name="pacoel_8bit_full_convert.mp3",
+            file_name="pacoel_sharp_8bit_convert.mp3",
             mime="audio/mpeg",
         )

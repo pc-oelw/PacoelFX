@@ -1,8 +1,11 @@
 streamlit
-requests
 pydub==0.25.1
 numpy
 audioop-lts
 librosa
 soundfile
 scipy
+demucs
+torch
+torchaudio
+ffmpeg-python

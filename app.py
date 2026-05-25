@@ -154,7 +154,7 @@ hihat = load_sound("sounds/hihat.wav")
 # -------------------------
 @st.cache_resource
 def get_hf_client():
-    return Client("facebook/MusicGen")
+    return Client("https://facebook-musicgen.hf.space/")
 
 
 # -------------------------
@@ -432,59 +432,57 @@ def generate_ai_audio(prompt, input_audio_path, duration=12):
 # -------------------------
 # Extract generated audio path
 # -------------------------
-def download_ai_audio(output):
-    candidates = []
+def generate_ai_audio(prompt, input_audio_path, duration=12):
+    try:
+        client = get_hf_client()
 
-    if isinstance(output, tuple) or isinstance(output, list):
-        candidates.extend(list(output))
-    else:
-        candidates.append(output)
-
-    for item in candidates:
-        if isinstance(item, str) and os.path.exists(item):
-            return item
-
-        if isinstance(item, dict):
-            if "path" in item and os.path.exists(item["path"]):
-                return item["path"]
-
-            if "name" in item and os.path.exists(item["name"]):
-                return item["name"]
-
-            if "url" in item:
-                url = item["url"]
-                temp_audio = tempfile.NamedTemporaryFile(
-                    delete=False,
-                    suffix=".wav"
-                )
-
-                response = requests.get(
-                    url,
-                    timeout=180
-                )
-
-                if response.status_code == 200:
-                    temp_audio.write(response.content)
-                    temp_audio.close()
-                    return temp_audio.name
-
-        if isinstance(item, str) and item.startswith("http"):
-            temp_audio = tempfile.NamedTemporaryFile(
-                delete=False,
-                suffix=".wav"
+        # 1차 시도: melody 입력 포함
+        try:
+            result = client.predict(
+                prompt,
+                handle_file(input_audio_path),
+                fn_index=0
             )
+            return result
 
-            response = requests.get(
-                item,
-                timeout=180
+        except Exception:
+            pass
+
+        # 2차 시도: melody 없이 텍스트만
+        try:
+            result = client.predict(
+                prompt,
+                None,
+                fn_index=0
             )
+            return result
 
-            if response.status_code == 200:
-                temp_audio.write(response.content)
-                temp_audio.close()
-                return temp_audio.name
+        except Exception:
+            pass
 
-    raise RuntimeError(f"Unknown Hugging Face output format: {output}")
+        # 3차 시도: api_name="/predict"
+        try:
+            result = client.predict(
+                prompt,
+                handle_file(input_audio_path),
+                api_name="/predict"
+            )
+            return result
+
+        except Exception:
+            pass
+
+        # 4차 시도: 텍스트만 /predict
+        result = client.predict(
+            prompt,
+            None,
+            api_name="/predict"
+        )
+
+        return result
+
+    except Exception as e:
+        raise RuntimeError(f"Hugging Face MusicGen failed: {e}")
 
 
 # -------------------------

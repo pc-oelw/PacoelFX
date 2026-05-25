@@ -28,22 +28,12 @@ st.markdown("""
     font-size: 58px;
     font-weight: 800;
     color: #111111;
-    margin-bottom: 0px;
 }
 
 .sub-title {
-    font-size: 20px;
+    font-size: 18px;
     color: #666666;
-    margin-top: -10px;
     margin-bottom: 35px;
-}
-
-.upload-box {
-    background: white;
-    padding: 30px;
-    border-radius: 25px;
-    box-shadow: 0px 4px 15px rgba(0,0,0,0.08);
-    margin-bottom: 20px;
 }
 
 .stButton button {
@@ -78,12 +68,12 @@ st.markdown(
 )
 
 st.markdown(
-    '<div class="sub-title">Automatic Remix Generator</div>',
+    '<div class="sub-title">Speedcore Remix Generator</div>',
     unsafe_allow_html=True
 )
 
 # -------------------------
-# 드럼 파일 불러오기
+# 드럼 파일 로드
 # -------------------------
 def load_sound(path):
 
@@ -97,42 +87,35 @@ snare = load_sound("sounds/snare.wav")
 hihat = load_sound("sounds/hihat.wav")
 
 # -------------------------
-# 드럼 추가 함수
+# 드럼 추가
 # -------------------------
-def add_drums(audio, bpm=140):
+def add_drums(audio, bpm=170):
 
     beat = int(60000 / bpm)
 
     output = audio
 
-    for i in range(0, len(audio), beat * 2):
+    for i in range(0, len(audio), beat):
 
         # 킥
         if kick:
             output = output.overlay(
-                kick - 1,
+                kick - 2,
                 position=i
-            )
-
-        # 두번째 킥
-        if kick:
-            output = output.overlay(
-                kick - 4,
-                position=i + beat
-            )
-
-        # 스네어
-        if snare:
-            output = output.overlay(
-                snare - 6,
-                position=i + beat * 2
             )
 
         # 하이햇
         if hihat:
             output = output.overlay(
-                hihat - 13,
+                hihat - 10,
                 position=i + beat // 2
+            )
+
+        # 스네어
+        if snare:
+            output = output.overlay(
+                snare - 5,
+                position=i + beat
             )
 
     return output
@@ -146,20 +129,7 @@ uploaded = st.file_uploader(
 )
 
 # -------------------------
-# 스타일 선택
-# -------------------------
-style = st.selectbox(
-    "Choose Remix Style",
-    [
-        "Nightcore",
-        "EDM Remix",
-        "Slowed Reverb",
-        "Bass Boost"
-    ]
-)
-
-# -------------------------
-# 리믹스 시작
+# 실행
 # -------------------------
 if uploaded:
 
@@ -177,7 +147,7 @@ if uploaded:
 
             progress.progress(i)
 
-            status.write(f"Generating Remix... {i}%")
+            status.write(f"Generating Speedcore... {i}%")
 
         # -------------------------
         # 임시 저장
@@ -191,77 +161,61 @@ if uploaded:
         audio = AudioSegment.from_file(temp_path)
 
         # -------------------------
-        # NIGHTCORE
+        # 구간 분리
         # -------------------------
-        if style == "Nightcore":
+        length = len(audio)
 
-            # 너무 빠르지 않게
-            remixed = speedup(audio, 1.08)
+        first = audio[:length // 2]
 
-            # 살짝 피치 상승
-            remixed = remixed._spawn(
-                remixed.raw_data,
-                overrides={
-                    "frame_rate":
-                    int(remixed.frame_rate * 1.04)
-                }
-            ).set_frame_rate(audio.frame_rate)
-
-            # 드럼 추가
-            remixed = add_drums(remixed, bpm=145)
-
-            # 전체 볼륨
-            remixed = remixed + 2
+        second = audio[length // 2:]
 
         # -------------------------
-        # EDM REMIX
+        # 초반
         # -------------------------
-        elif style == "EDM Remix":
+        first = speedup(
+            first,
+            playback_speed=1.05
+        )
 
-            remixed = speedup(audio, 1.05)
-
-            remixed = add_drums(remixed, bpm=128)
-
-            remixed = remixed + 4
-
-        # -------------------------
-        # SLOWED REVERB
-        # -------------------------
-        elif style == "Slowed Reverb":
-
-            remixed = audio._spawn(
-                audio.raw_data,
-                overrides={
-                    "frame_rate":
-                    int(audio.frame_rate * 0.85)
-                }
-            ).set_frame_rate(audio.frame_rate)
-
-            echo = remixed - 10
-
-            remixed = remixed.overlay(
-                echo,
-                position=150
-            )
+        first = add_drums(
+            first,
+            bpm=165
+        )
 
         # -------------------------
-        # BASS BOOST
+        # 후반 더 빠르게
         # -------------------------
-        else:
+        second = speedup(
+            second,
+            playback_speed=1.12
+        )
 
-            remixed = audio + 6
+        second = add_drums(
+            second,
+            bpm=185
+        )
+
+        second = second + 3
+
+        # -------------------------
+        # 합치기
+        # -------------------------
+        remixed = first.append(
+            second,
+            crossfade=250
+        )
 
         # -------------------------
         # 저장
         # -------------------------
-        output_path = "pacoel_remix.mp3"
+        output_path = "speedcore_remix.mp3"
 
         remixed.export(
             output_path,
             format="mp3"
         )
 
-        st.success("Remix Complete!")
+        st.success("Speedcore Remix Complete!")
 
         st.audio(output_path)
 
@@ -270,5 +224,5 @@ if uploaded:
             st.download_button(
                 "⬇ Download Remix",
                 f,
-                file_name="pacoel_remix.mp3"
+                file_name="speedcore_remix.mp3"
             )

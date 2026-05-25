@@ -21,7 +21,7 @@ st.markdown("""
 <style>
 
 .stApp {
-    background-color: #e9e9ec;
+    background-color: #e7e7ea;
 }
 
 .main-title {
@@ -35,10 +35,10 @@ st.markdown("""
     font-size: 20px;
     color: #666666;
     margin-top: -10px;
-    margin-bottom: 40px;
+    margin-bottom: 35px;
 }
 
-.box {
+.upload-box {
     background: white;
     padding: 30px;
     border-radius: 25px;
@@ -49,8 +49,8 @@ st.markdown("""
 .stButton button {
     background-color: black;
     color: white;
-    border-radius: 15px;
-    height: 50px;
+    border-radius: 16px;
+    height: 52px;
     width: 100%;
     font-size: 18px;
     border: none;
@@ -59,10 +59,11 @@ st.markdown("""
 .stDownloadButton button {
     background-color: black;
     color: white;
-    border-radius: 15px;
-    height: 50px;
+    border-radius: 16px;
+    height: 52px;
     width: 100%;
     font-size: 18px;
+    border: none;
 }
 
 </style>
@@ -80,6 +81,61 @@ st.markdown(
     '<div class="sub-title">Automatic Remix Generator</div>',
     unsafe_allow_html=True
 )
+
+# -------------------------
+# 드럼 파일 불러오기
+# -------------------------
+def load_sound(path):
+
+    if os.path.exists(path):
+        return AudioSegment.from_file(path)
+
+    return None
+
+kick = load_sound("sounds/kick.wav")
+snare = load_sound("sounds/snare.wav")
+hihat = load_sound("sounds/hihat.wav")
+
+# -------------------------
+# 드럼 추가 함수
+# -------------------------
+def add_drums(audio, bpm=140):
+
+    beat = int(60000 / bpm)
+
+    output = audio
+
+    for i in range(0, len(audio), beat * 2):
+
+        # 킥
+        if kick:
+            output = output.overlay(
+                kick - 1,
+                position=i
+            )
+
+        # 두번째 킥
+        if kick:
+            output = output.overlay(
+                kick - 4,
+                position=i + beat
+            )
+
+        # 스네어
+        if snare:
+            output = output.overlay(
+                snare - 6,
+                position=i + beat * 2
+            )
+
+        # 하이햇
+        if hihat:
+            output = output.overlay(
+                hihat - 13,
+                position=i + beat // 2
+            )
+
+    return output
 
 # -------------------------
 # 업로드
@@ -103,7 +159,7 @@ style = st.selectbox(
 )
 
 # -------------------------
-# 리믹스
+# 리믹스 시작
 # -------------------------
 if uploaded:
 
@@ -121,8 +177,11 @@ if uploaded:
 
             progress.progress(i)
 
-            status.write(f"Processing... {i}%")
+            status.write(f"Generating Remix... {i}%")
 
+        # -------------------------
+        # 임시 저장
+        # -------------------------
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
 
             tmp.write(uploaded.read())
@@ -136,27 +195,37 @@ if uploaded:
         # -------------------------
         if style == "Nightcore":
 
-            remixed = speedup(audio, 1.25)
+            # 너무 빠르지 않게
+            remixed = speedup(audio, 1.08)
 
+            # 살짝 피치 상승
             remixed = remixed._spawn(
                 remixed.raw_data,
                 overrides={
                     "frame_rate":
-                    int(remixed.frame_rate * 1.1)
+                    int(remixed.frame_rate * 1.04)
                 }
             ).set_frame_rate(audio.frame_rate)
 
+            # 드럼 추가
+            remixed = add_drums(remixed, bpm=145)
+
+            # 전체 볼륨
+            remixed = remixed + 2
+
         # -------------------------
-        # EDM
+        # EDM REMIX
         # -------------------------
         elif style == "EDM Remix":
 
-            remixed = speedup(audio, 1.1)
+            remixed = speedup(audio, 1.05)
 
-            remixed = remixed + 5
+            remixed = add_drums(remixed, bpm=128)
+
+            remixed = remixed + 4
 
         # -------------------------
-        # SLOWED
+        # SLOWED REVERB
         # -------------------------
         elif style == "Slowed Reverb":
 
@@ -164,16 +233,23 @@ if uploaded:
                 audio.raw_data,
                 overrides={
                     "frame_rate":
-                    int(audio.frame_rate * 0.82)
+                    int(audio.frame_rate * 0.85)
                 }
             ).set_frame_rate(audio.frame_rate)
+
+            echo = remixed - 10
+
+            remixed = remixed.overlay(
+                echo,
+                position=150
+            )
 
         # -------------------------
         # BASS BOOST
         # -------------------------
         else:
 
-            remixed = audio + 7
+            remixed = audio + 6
 
         # -------------------------
         # 저장

@@ -2,6 +2,7 @@ import streamlit as st
 from pydub import AudioSegment
 from pydub.effects import speedup
 import librosa
+import numpy as np
 import tempfile
 import time
 import os
@@ -69,7 +70,7 @@ st.markdown(
 )
 
 st.markdown(
-    '<div class="sub-title">AI Adaptive Remix</div>',
+    '<div class="sub-title">AI Adaptive Remix Engine</div>',
     unsafe_allow_html=True
 )
 
@@ -88,9 +89,9 @@ snare = load_sound("sounds/snare.wav")
 hihat = load_sound("sounds/hihat.wav")
 
 # -------------------------
-# AI 드럼 추가
+# AI 드럼 함수
 # -------------------------
-def add_ai_drums(audio, beat_times):
+def add_ai_drums(audio, beat_times, intensity=1):
 
     output = audio
 
@@ -100,22 +101,25 @@ def add_ai_drums(audio, beat_times):
 
         # 킥
         if kick and i % 2 == 0:
+
             output = output.overlay(
-                kick - 2,
+                kick - (2 - intensity),
                 position=pos
             )
 
         # 하이햇
         if hihat:
+
             output = output.overlay(
                 hihat - 14,
-                position=pos + 100
+                position=pos + 90
             )
 
         # 스네어
         if snare and i % 4 == 2:
+
             output = output.overlay(
-                snare - 6,
+                snare - 5,
                 position=pos
             )
 
@@ -142,12 +146,13 @@ if uploaded:
 
         status = st.empty()
 
-        loading_steps = [
+        loading = [
             "Analyzing Audio...",
             "Detecting BPM...",
-            "Detecting Beats...",
-            "Generating Remix...",
-            "Adding Drums...",
+            "Detecting Energy...",
+            "Finding Drops...",
+            "Generating AI Remix...",
+            "Adding AI Drums...",
             "Finalizing..."
         ]
 
@@ -157,23 +162,26 @@ if uploaded:
 
             progress.progress(i)
 
-            if i < 15:
-                status.write(loading_steps[0])
+            if i < 10:
+                status.write(loading[0])
 
-            elif i < 30:
-                status.write(loading_steps[1])
+            elif i < 25:
+                status.write(loading[1])
 
-            elif i < 50:
-                status.write(loading_steps[2])
+            elif i < 40:
+                status.write(loading[2])
+
+            elif i < 55:
+                status.write(loading[3])
 
             elif i < 75:
-                status.write(loading_steps[3])
+                status.write(loading[4])
 
             elif i < 90:
-                status.write(loading_steps[4])
+                status.write(loading[5])
 
             else:
-                status.write(loading_steps[5])
+                status.write(loading[6])
 
         # -------------------------
         # 임시 저장
@@ -185,13 +193,14 @@ if uploaded:
             temp_path = tmp.name
 
         # -------------------------
-        # AI BPM 분석
+        # librosa 분석
         # -------------------------
         y, sr = librosa.load(
             temp_path,
             sr=None
         )
 
+        # BPM
         tempo, beats = librosa.beat.beat_track(
             y=y,
             sr=sr
@@ -203,22 +212,13 @@ if uploaded:
         )
 
         # -------------------------
-        # BPM 기반 속도 계산
+        # 에너지 분석
         # -------------------------
-        if tempo < 90:
+        rms = librosa.feature.rms(y=y)[0]
 
-            first_speed = 1.12
-            second_speed = 1.20
+        energy = np.mean(rms)
 
-        elif tempo < 120:
-
-            first_speed = 1.08
-            second_speed = 1.14
-
-        else:
-
-            first_speed = 1.03
-            second_speed = 1.08
+        high_energy = np.percentile(rms, 85)
 
         # -------------------------
         # 오디오 로드
@@ -230,51 +230,105 @@ if uploaded:
         # -------------------------
         # 구간 분리
         # -------------------------
-        first = audio[:length // 2]
+        intro = audio[:length // 3]
 
-        second = audio[length // 2:]
+        middle = audio[length // 3:length // 3 * 2]
+
+        drop = audio[length // 3 * 2:]
 
         # -------------------------
-        # 초반
+        # AI 속도 계산
         # -------------------------
-        first = speedup(
-            first,
-            playback_speed=first_speed
+        if tempo < 90:
+
+            intro_speed = 1.03
+            middle_speed = 1.08
+            drop_speed = 1.15
+
+        elif tempo < 130:
+
+            intro_speed = 1.02
+            middle_speed = 1.06
+            drop_speed = 1.10
+
+        else:
+
+            intro_speed = 1.00
+            middle_speed = 1.03
+            drop_speed = 1.06
+
+        # -------------------------
+        # 구간별 처리
+        # -------------------------
+        intro = speedup(
+            intro,
+            playback_speed=intro_speed
+        )
+
+        middle = speedup(
+            middle,
+            playback_speed=middle_speed
+        )
+
+        drop = speedup(
+            drop,
+            playback_speed=drop_speed
         )
 
         # -------------------------
-        # 후반
+        # 드랍 강화
         # -------------------------
-        second = speedup(
-            second,
-            playback_speed=second_speed
+        if energy > 0.05:
+
+            drop = drop + 4
+
+        else:
+
+            drop = drop + 2
+
+        # -------------------------
+        # AI 드럼
+        # -------------------------
+        intro = add_ai_drums(
+            intro,
+            beat_times,
+            intensity=0
+        )
+
+        middle = add_ai_drums(
+            middle,
+            beat_times,
+            intensity=1
+        )
+
+        drop = add_ai_drums(
+            drop,
+            beat_times,
+            intensity=2
         )
 
         # -------------------------
         # 합치기
         # -------------------------
-        remixed = first.append(
-            second,
+        remixed = intro.append(
+            middle,
             crossfade=250
         )
 
-        # -------------------------
-        # AI 드럼 추가
-        # -------------------------
-        remixed = add_ai_drums(
-            remixed,
-            beat_times
+        remixed = remixed.append(
+            drop,
+            crossfade=350
         )
 
         # -------------------------
-        # 후반 강화
+        # 최종 볼륨
         # -------------------------
-        remixed = remixed + 2
+        remixed = remixed + 1
 
         # -------------------------
         # 저장
         # -------------------------
-        output_path = "ai_remix.mp3"
+        output_path = "ai_adaptive_remix.mp3"
 
         remixed.export(
             output_path,
@@ -290,5 +344,5 @@ if uploaded:
             st.download_button(
                 "⬇ Download Remix",
                 f,
-                file_name="ai_remix.mp3"
+                file_name="ai_adaptive_remix.mp3"
             )

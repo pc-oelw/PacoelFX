@@ -1,26 +1,24 @@
 import streamlit as st
 from pydub import AudioSegment
-from pydub.effects import speedup, high_pass_filter
 import librosa
 import numpy as np
 import tempfile
 import time
 import os
-import requests
+import io
 
+# -------------------------
+# Page config
+# -------------------------
 st.set_page_config(
     page_title="Pacoel Wave",
-    page_icon="🎵",
+    page_icon="🎮",
     layout="wide"
 )
 
-try:
-    HF_TOKEN = st.secrets["HF_TOKEN"]
-    HF_READY = True
-except Exception:
-    HF_TOKEN = None
-    HF_READY = False
-
+# -------------------------
+# CSS
+# -------------------------
 st.markdown("""
 <style>
 html, body, [class*="css"] {
@@ -82,62 +80,42 @@ html, body, [class*="css"] {
 div[data-testid="stMarkdownContainer"] {
     color: #111111;
 }
-
-div[data-testid="stAlert"] {
-    background-color: #c7c7cc;
-    color: #111111;
-}
 </style>
 """, unsafe_allow_html=True)
 
+# -------------------------
+# Header
+# -------------------------
 st.markdown(
-    '<div class="main-title">🎵 Pacoel Wave</div>',
+    '<div class="main-title">🎮 Pacoel Wave</div>',
     unsafe_allow_html=True
 )
 
 st.markdown(
-    '<div class="sub-title">Hugging Face AI Remix Engine</div>',
+    '<div class="sub-title">8-Bit Chiptune Remix Engine</div>',
     unsafe_allow_html=True
 )
 
 st.markdown("""
 <div class="info-box">
 
-Upload a song, write remix commands, and Pacoel Wave will try to generate
-a new AI speedcore-style drop with Hugging Face. If AI generation fails,
-it will use fallback remix mode.
+Upload a song and Pacoel Wave will turn it into an 8-bit / chiptune-style remix.
+It keeps the original song recognizable while adding square-wave synths,
+retro drums, bitcrush texture, and arcade-style energy.
 
 </div>
 """, unsafe_allow_html=True)
 
-
-def load_sound(path):
-    if os.path.exists(path):
-        return AudioSegment.from_file(path)
-    return None
-
-
-kick = load_sound("sounds/kick.wav")
-snare = load_sound("sounds/snare.wav")
-hihat = load_sound("sounds/hihat.wav")
+# -------------------------
+# Constants
+# -------------------------
+SAMPLE_RATE = 22050
 
 
-def safe_speedup(audio, playback_speed):
-    if playback_speed <= 1.01:
-        return audio
-
-    try:
-        return speedup(
-            audio,
-            playback_speed=playback_speed,
-            chunk_size=90,
-            crossfade=20
-        )
-    except Exception:
-        return audio
-
-
-def analyze_audio(file_path):
+# -------------------------
+# Audio analysis
+# -------------------------
+def analyze_bpm(file_path):
     y, sr = librosa.load(
         file_path,
         sr=None,
@@ -157,90 +135,34 @@ def analyze_audio(file_path):
     if bpm <= 0 or np.isnan(bpm):
         bpm = 140
 
-    beat_times = librosa.frames_to_time(
-        beats,
-        sr=sr
-    )
-
-    beat_ms = [
-        int(t * 1000)
-        for t in beat_times
-    ]
-
-    rms = librosa.feature.rms(y=y)[0]
-
-    rms_times = librosa.frames_to_time(
-        np.arange(len(rms)),
-        sr=sr
-    )
-
-    return int(bpm), beat_ms, rms, rms_times
+    return int(bpm)
 
 
-def nearest_beat_ms(target_ms, beat_ms):
-    if not beat_ms:
-        return target_ms
+# -------------------------
+# Command parser
+# -------------------------
+def parse_command(command):
+    text = command.lower() if command else ""
 
-    nearby = [
-        b for b in beat_ms
-        if abs(b - target_ms) < 2200
-    ]
+    vibe = "arcade"
+    intensity = "normal"
+    target_bpm = None
 
-    if not nearby:
-        return target_ms
+    if "dark" in text or "어둡" in text:
+        vibe = "dark"
+    elif "cute" in text or "귀여" in text:
+        vibe = "cute"
+    elif "boss" in text or "보스" in text:
+        vibe = "boss"
+    elif "happy" in text or "밝" in text:
+        vibe = "happy"
 
-    return min(
-        nearby,
-        key=lambda x: abs(x - target_ms)
-    )
+    if "hard" in text or "강" in text or "intense" in text:
+        intensity = "hard"
+    elif "soft" in text or "약" in text:
+        intensity = "soft"
 
-
-def find_drop_point_ms(total_ms, rms, rms_times, beat_ms):
-    if len(rms) < 10:
-        return int(total_ms * 0.62)
-
-    start_sec = (total_ms / 1000) * 0.35
-    end_sec = (total_ms / 1000) * 0.78
-
-    candidates = []
-
-    for i in range(5, len(rms)):
-        t = rms_times[i]
-
-        if t < start_sec or t > end_sec:
-            continue
-
-        before = np.mean(rms[max(0, i - 5):i])
-        now = rms[i]
-        rise = now - before
-
-        candidates.append((rise, t))
-
-    if not candidates:
-        drop_ms = int(total_ms * 0.62)
-    else:
-        candidates.sort(reverse=True)
-        drop_ms = int(candidates[0][1] * 1000)
-
-    drop_ms = nearest_beat_ms(
-        drop_ms,
-        beat_ms
-    )
-
-    drop_ms = max(
-        int(total_ms * 0.42),
-        min(drop_ms, int(total_ms * 0.82))
-    )
-
-    return drop_ms
-
-
-def parse_command(user_command):
-    command = user_command.lower() if user_command else ""
-
-    target_bpm = 240
-
-    words = command.replace("/", " ").replace(":", " ").split()
+    words = text.replace("/", " ").replace(":", " ").split()
 
     for i, word in enumerate(words):
         if word == "bpm" and i + 1 < len(words):
@@ -249,302 +171,425 @@ def parse_command(user_command):
             except Exception:
                 pass
 
-    target_bpm = max(
-        180,
-        min(target_bpm, 280)
+    return vibe, intensity, target_bpm
+
+
+# -------------------------
+# Wave generators
+# -------------------------
+def square_wave(freq, duration_ms, volume_db=-12):
+    duration = duration_ms / 1000
+    t = np.linspace(
+        0,
+        duration,
+        int(SAMPLE_RATE * duration),
+        False
     )
 
-    if "280" in command:
-        target_bpm = 280
-    elif "270" in command:
-        target_bpm = 270
-    elif "260" in command:
-        target_bpm = 260
-    elif "250" in command:
-        target_bpm = 250
-    elif "240" in command:
-        target_bpm = 240
-    elif "220" in command:
-        target_bpm = 220
-
-    if "sudden" in command or "갑자기" in command:
-        drop_type = "sudden explosive tempo switch drop"
-    elif "smooth" in command or "자연" in command:
-        drop_type = "smooth build into a fast drop"
-    else:
-        drop_type = "sudden tempo-switch drop"
-
-    if "glitch" in command or "글리치" in command:
-        intro_type = "glitchy chopped intro texture"
-    elif "dark" in command or "어둡" in command:
-        intro_type = "dark electronic intro texture"
-    elif "cute" in command or "귀여" in command:
-        intro_type = "bright cute arcade synth intro texture"
-    else:
-        intro_type = "bright arcade electronic intro texture"
-
-    if "hard" in command or "distorted" in command or "강" in command:
-        kick_type = "heavy distorted hardcore kicks"
-    else:
-        kick_type = "fast clean hardcore kicks"
-
-    cleaned_command = command.replace("/", ", ")
-
-    return {
-        "target_bpm": target_bpm,
-        "drop_type": drop_type,
-        "intro_type": intro_type,
-        "kick_type": kick_type,
-        "raw": cleaned_command
-    }
-
-
-def make_intro_prompt(command_info):
-    prompt = (
-        f"{command_info['intro_type']}, "
-        "short remix intro, energetic rhythm game electronic music, "
-        "bright synths, chopped melody, instrumental, no vocals, clean mix"
+    wave = np.sign(
+        np.sin(2 * np.pi * freq * t)
     )
 
-    if command_info["raw"]:
-        prompt += ", user direction: " + command_info["raw"]
+    samples = (wave * 0.35 * 32767).astype(np.int16)
 
-    return prompt
-
-
-def make_drop_prompt(command_info):
-    target_bpm = command_info["target_bpm"]
-
-    prompt = (
-        f"chaotic J-core speedcore drop, {target_bpm} BPM, "
-        f"{command_info['drop_type']}, {command_info['kick_type']}, "
-        "rapid drum fills, bright arcade synth leads, rhythm game boss song energy, "
-        "hyper energetic electronic drop, intense but clean mix, instrumental, no vocals"
+    seg = AudioSegment(
+        samples.tobytes(),
+        frame_rate=SAMPLE_RATE,
+        sample_width=2,
+        channels=1
     )
 
-    if command_info["raw"]:
-        prompt += ", user direction: " + command_info["raw"]
-
-    return prompt
+    return seg + volume_db
 
 
-def generate_hf_music(prompt, duration=10):
-    if not HF_READY:
-        raise RuntimeError("HF_TOKEN is missing in Streamlit Secrets.")
+def triangle_wave(freq, duration_ms, volume_db=-14):
+    duration = duration_ms / 1000
+    t = np.linspace(
+        0,
+        duration,
+        int(SAMPLE_RATE * duration),
+        False
+    )
 
-    api_urls = [
-        "https://api-inference.huggingface.co/models/facebook/musicgen-small",
-        "https://api-inference.huggingface.co/models/facebook/musicgen-stereo-small"
-    ]
+    wave = 2 * np.abs(
+        2 * ((freq * t) % 1) - 1
+    ) - 1
 
-    headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-        "Accept": "audio/wav"
-    }
+    samples = (wave * 0.32 * 32767).astype(np.int16)
 
-    payload = {
-        "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": 256,
-            "do_sample": True,
-            "temperature": 1.0
-        },
-        "options": {
-            "wait_for_model": True
-        }
-    }
+    seg = AudioSegment(
+        samples.tobytes(),
+        frame_rate=SAMPLE_RATE,
+        sample_width=2,
+        channels=1
+    )
 
-    last_error = None
-
-    for api_url in api_urls:
-        try:
-            response = requests.post(
-                api_url,
-                headers=headers,
-                json=payload,
-                timeout=240
-            )
-
-            content_type = response.headers.get("content-type", "")
-
-            if response.status_code == 200 and (
-                "audio" in content_type or len(response.content) > 10000
-            ):
-                temp_audio = tempfile.NamedTemporaryFile(
-                    delete=False,
-                    suffix=".wav"
-                )
-
-                temp_audio.write(response.content)
-                temp_audio.close()
-
-                return temp_audio.name
-
-            last_error = (
-                f"{api_url} failed: status={response.status_code}, "
-                f"content-type={content_type}, text={response.text[:500]}"
-            )
-
-        except Exception as e:
-            last_error = str(e)
-
-    raise RuntimeError(last_error or "Hugging Face music generation failed.")
+    return seg + volume_db
 
 
-def process_intro(original_intro, ai_intro_layer, bpm):
-    intro = original_intro.fade_in(300)
-    intro = high_pass_filter(intro, 35)
+def noise_hit(duration_ms=80, volume_db=-15):
+    samples = np.random.uniform(
+        -1,
+        1,
+        int(SAMPLE_RATE * duration_ms / 1000)
+    )
 
-    if ai_intro_layer:
-        ai_layer = ai_intro_layer[:len(intro)]
-        ai_layer = ai_layer - 6
-        ai_layer = high_pass_filter(ai_layer, 120)
+    envelope = np.linspace(
+        1,
+        0,
+        len(samples)
+    )
 
-        intro = intro.overlay(
-            ai_layer,
-            position=0
-        )
+    samples = samples * envelope
+
+    samples = (samples * 0.5 * 32767).astype(np.int16)
+
+    seg = AudioSegment(
+        samples.tobytes(),
+        frame_rate=SAMPLE_RATE,
+        sample_width=2,
+        channels=1
+    )
+
+    return seg + volume_db
+
+
+# -------------------------
+# 8-bit / bitcrush effect
+# -------------------------
+def bitcrush(audio, bits=8, mix=0.45):
+    base = audio.set_channels(1).set_sample_width(2)
+
+    samples = np.array(
+        base.get_array_of_samples()
+    ).astype(np.float32)
+
+    if len(samples) == 0:
+        return audio
+
+    max_amp = 32767
+    levels = 2 ** bits
+
+    crushed = np.round(
+        samples / max_amp * levels
+    ) / levels * max_amp
+
+    crushed = np.clip(
+        crushed,
+        -32768,
+        32767
+    ).astype(np.int16)
+
+    crushed_audio = AudioSegment(
+        crushed.tobytes(),
+        frame_rate=base.frame_rate,
+        sample_width=2,
+        channels=1
+    )
+
+    crushed_audio = crushed_audio.set_channels(
+        audio.channels
+    ).set_frame_rate(
+        audio.frame_rate
+    )
+
+    crushed_audio = crushed_audio - int((1 - mix) * 12)
+
+    original = audio - int(mix * 5)
+
+    return original.overlay(
+        crushed_audio
+    )
+
+
+# -------------------------
+# Music helpers
+# -------------------------
+def get_scale(vibe):
+    if vibe == "dark":
+        return [261.63, 293.66, 311.13, 349.23, 392.00, 415.30, 466.16]
+    elif vibe == "cute":
+        return [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 659.25]
+    elif vibe == "boss":
+        return [246.94, 277.18, 329.63, 369.99, 415.30, 493.88, 554.37]
+    else:
+        return [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 523.25]
+
+
+def match_layer(layer, target):
+    return layer.set_frame_rate(
+        target.frame_rate
+    ).set_channels(
+        target.channels
+    )
+
+
+# -------------------------
+# Chiptune layers
+# -------------------------
+def add_chip_melody(audio, bpm, vibe, intensity):
+    output = audio
+
+    scale = get_scale(vibe)
 
     beat_ms = int(60000 / max(80, bpm))
-    start = int(len(intro) * 0.30)
-    end = len(intro) - 900
 
-    for pos in range(start, max(start, end), beat_ms * 2):
-        if hihat:
-            intro = intro.overlay(
-                hihat - 22,
-                position=pos + beat_ms // 2
-            )
+    if intensity == "hard":
+        step = beat_ms // 2
+        volume = -14
+    elif intensity == "soft":
+        step = beat_ms * 2
+        volume = -20
+    else:
+        step = beat_ms
+        volume = -17
 
-        if kick and pos > len(intro) * 0.62:
-            intro = intro.overlay(
-                kick - 12,
-                position=pos
-            )
+    pos = 0
+    index = 0
 
-    return intro
+    while pos < len(output) - 500:
+        freq = scale[index % len(scale)]
 
+        if index % 4 == 3:
+            freq *= 2
 
-def process_build(build, bpm):
-    if len(build) < 4000:
-        return build
-
-    parts = 4
-    part_len = len(build) // parts
-
-    speeds = [1.00, 1.03, 1.07, 1.12]
-    result = AudioSegment.empty()
-
-    for i in range(parts):
-        chunk = build[i * part_len:(i + 1) * part_len]
-
-        chunk = safe_speedup(
-            chunk,
-            speeds[i]
+        note = square_wave(
+            freq,
+            int(step * 0.75),
+            volume_db=volume
         )
 
-        chunk = chunk + i
+        note = note.fade_out(40)
+        note = match_layer(note, output)
 
-        if len(result) == 0:
-            result += chunk
-        else:
-            result = result.append(
-                chunk,
-                crossfade=80
-            )
+        output = output.overlay(
+            note,
+            position=pos
+        )
 
-    beat_ms = int(60000 / max(90, bpm))
-    end_limit = len(result) - 800
+        pos += step
+        index += 1
 
-    for pos in range(0, max(0, end_limit), beat_ms):
-        if hihat:
-            result = result.overlay(
-                hihat - 18,
-                position=pos + beat_ms // 2
-            )
+    return output
 
-        if kick and pos > len(result) * 0.50 and pos % (beat_ms * 2) == 0:
-            result = result.overlay(
-                kick - 10,
+
+def add_chip_bass(audio, bpm, vibe, intensity):
+    output = audio
+
+    scale = get_scale(vibe)
+
+    root = scale[0] / 2
+    fifth = scale[4] / 2
+
+    beat_ms = int(60000 / max(80, bpm))
+
+    if intensity == "hard":
+        volume = -9
+    elif intensity == "soft":
+        volume = -15
+    else:
+        volume = -12
+
+    pos = 0
+    count = 0
+
+    while pos < len(output) - beat_ms:
+        freq = root if count % 2 == 0 else fifth
+
+        bass = square_wave(
+            freq,
+            int(beat_ms * 0.85),
+            volume_db=volume
+        )
+
+        bass = bass.fade_out(60)
+        bass = match_layer(bass, output)
+
+        output = output.overlay(
+            bass,
+            position=pos
+        )
+
+        pos += beat_ms
+        count += 1
+
+    return output
+
+
+def add_chip_drums(audio, bpm, intensity):
+    output = audio
+
+    beat_ms = int(60000 / max(80, bpm))
+
+    if intensity == "hard":
+        kick_vol = -5
+        snare_vol = -10
+        hat_vol = -18
+    elif intensity == "soft":
+        kick_vol = -11
+        snare_vol = -16
+        hat_vol = -24
+    else:
+        kick_vol = -8
+        snare_vol = -13
+        hat_vol = -21
+
+    kick_sound = square_wave(
+        70,
+        90,
+        volume_db=kick_vol
+    ).fade_out(70)
+
+    snare_sound = noise_hit(
+        90,
+        volume_db=snare_vol
+    )
+
+    hat_sound = noise_hit(
+        35,
+        volume_db=hat_vol
+    )
+
+    kick_sound = match_layer(kick_sound, output)
+    snare_sound = match_layer(snare_sound, output)
+    hat_sound = match_layer(hat_sound, output)
+
+    pos = 0
+    beat_count = 0
+
+    end_limit = len(output) - 900
+
+    while pos < end_limit:
+        if beat_count % 2 == 0:
+            output = output.overlay(
+                kick_sound,
                 position=pos
             )
 
-    return result
-
-
-def process_ai_drop(ai_drop, target_bpm):
-    drop = ai_drop + 2
-
-    beat_ms = int(60000 / target_bpm)
-    kick_interval = max(95, beat_ms // 2)
-
-    end_limit = len(drop) - 1500
-
-    for pos in range(0, max(0, end_limit), kick_interval):
-        if kick:
-            drop = drop.overlay(
-                kick + 1,
+        if beat_count % 4 == 2:
+            output = output.overlay(
+                snare_sound,
                 position=pos
             )
 
-        if hihat and pos % (kick_interval * 2) == 0:
-            drop = drop.overlay(
-                hihat - 11,
-                position=pos + 25
+        output = output.overlay(
+            hat_sound,
+            position=pos + beat_ms // 2
+        )
+
+        if intensity == "hard":
+            output = output.overlay(
+                hat_sound - 3,
+                position=pos + beat_ms // 4
             )
 
-        if snare and pos % (kick_interval * 4) == 0:
-            drop = drop.overlay(
-                snare - 7,
-                position=pos + 60
-            )
+        pos += beat_ms
+        beat_count += 1
 
-        if kick and pos % (kick_interval * 8) == 0:
-            extra = pos + int(kick_interval * 0.55)
-
-            if extra < end_limit:
-                drop = drop.overlay(
-                    kick - 2,
-                    position=extra
-                )
-
-    drop = drop.fade_in(80)
-    drop = drop.fade_out(1200)
-
-    return drop
+    return output
 
 
-def fallback_drop(source_audio, target_bpm):
-    drop = safe_speedup(
-        source_audio,
-        1.15
+# -------------------------
+# Section processing
+# -------------------------
+def process_intro(audio, bpm, vibe, intensity):
+    section = bitcrush(
+        audio,
+        bits=8,
+        mix=0.35
     )
 
-    return process_ai_drop(
-        drop,
-        target_bpm
+    section = add_chip_melody(
+        section,
+        bpm,
+        vibe,
+        "soft"
     )
 
+    section = section.fade_in(300)
 
+    return section
+
+
+def process_build(audio, bpm, vibe, intensity):
+    section = bitcrush(
+        audio,
+        bits=7,
+        mix=0.5
+    )
+
+    section = add_chip_bass(
+        section,
+        bpm,
+        vibe,
+        intensity
+    )
+
+    section = add_chip_drums(
+        section,
+        bpm,
+        "soft" if intensity == "soft" else "normal"
+    )
+
+    section = section + 1
+
+    return section
+
+
+def process_drop(audio, bpm, vibe, intensity):
+    section = bitcrush(
+        audio,
+        bits=6,
+        mix=0.65
+    )
+
+    # 8-bit remix는 원곡을 너무 빠르게 망가뜨리지 않고,
+    # 칩튠 악기와 드럼으로 편곡감을 줌
+    section = add_chip_bass(
+        section,
+        bpm,
+        vibe,
+        "hard" if intensity != "soft" else "normal"
+    )
+
+    section = add_chip_melody(
+        section,
+        bpm,
+        vibe,
+        "hard" if intensity != "soft" else "normal"
+    )
+
+    section = add_chip_drums(
+        section,
+        bpm,
+        "hard" if intensity != "soft" else "normal"
+    )
+
+    section = section + 2
+    section = section.fade_out(1200)
+
+    return section
+
+
+# -------------------------
+# Session state
+# -------------------------
 if "remix_bytes" not in st.session_state:
     st.session_state.remix_bytes = None
 
 if "remix_bpm" not in st.session_state:
     st.session_state.remix_bpm = None
 
-if "drop_bpm" not in st.session_state:
-    st.session_state.drop_bpm = None
-
-if "ai_used" not in st.session_state:
-    st.session_state.ai_used = None
-
 if "remix_source" not in st.session_state:
     st.session_state.remix_source = None
 
-if "error_text" not in st.session_state:
-    st.session_state.error_text = None
+if "remix_info" not in st.session_state:
+    st.session_state.remix_info = None
 
 
+# -------------------------
+# UI
+# -------------------------
 uploaded = st.file_uploader(
     "Upload Audio",
     type=["mp3", "wav"]
@@ -553,15 +598,15 @@ uploaded = st.file_uploader(
 st.markdown('<div class="command-box">', unsafe_allow_html=True)
 
 user_command = st.text_area(
-    "AI Remix Command",
-    value="""/style chaotic j-core speedcore
-/bpm 250
-/drop sudden tempo switch
-/intro glitchy chopped melody
-/kick heavy distorted hardcore kick
-/vibe rhythm game boss song
+    "8-Bit Remix Command",
+    value="""/style 8-bit chiptune arcade
+/vibe rhythm game
+/bpm auto
+/intensity hard
+/intro retro
+/drop arcade boss
 """,
-    height=150
+    height=140
 )
 
 st.markdown("</div>", unsafe_allow_html=True)
@@ -570,54 +615,43 @@ if uploaded:
     if st.session_state.remix_source != uploaded.name:
         st.session_state.remix_bytes = None
         st.session_state.remix_bpm = None
-        st.session_state.drop_bpm = None
-        st.session_state.ai_used = None
-        st.session_state.error_text = None
+        st.session_state.remix_info = None
         st.session_state.remix_source = uploaded.name
 
     st.audio(uploaded)
 
-    if not HF_READY:
-        st.warning("HF_TOKEN이 Streamlit Secrets에 없어. AI 생성은 fallback으로만 작동해.")
-
-    if st.button("Generate AI Remix"):
+    if st.button("Generate 8-Bit Remix"):
         progress = st.progress(0)
         status = st.empty()
 
         steps = [
             "Uploading audio...",
-            "Analyzing BPM and energy...",
-            "Finding musical drop point...",
+            "Analyzing BPM...",
             "Reading remix command...",
-            "Generating AI intro...",
-            "Generating AI speedcore drop...",
-            "Processing build-up...",
-            "Blending remix sections...",
+            "Creating 8-bit intro...",
+            "Creating chiptune build-up...",
+            "Creating arcade drop...",
             "Finalizing remix..."
         ]
 
         for i in range(101):
-            time.sleep(0.012)
+            time.sleep(0.01)
             progress.progress(i)
 
-            if i < 8:
+            if i < 12:
                 status.write(steps[0])
-            elif i < 18:
+            elif i < 25:
                 status.write(steps[1])
-            elif i < 28:
-                status.write(steps[2])
             elif i < 38:
-                status.write(steps[3])
+                status.write(steps[2])
             elif i < 55:
+                status.write(steps[3])
+            elif i < 72:
                 status.write(steps[4])
-            elif i < 75:
+            elif i < 90:
                 status.write(steps[5])
-            elif i < 86:
-                status.write(steps[6])
-            elif i < 96:
-                status.write(steps[7])
             else:
-                status.write(steps[8])
+                status.write(steps[6])
 
         file_ext = os.path.splitext(uploaded.name)[1]
 
@@ -629,150 +663,87 @@ if uploaded:
             tmp.write(uploaded.read())
             temp_path = tmp.name
 
-        bpm, beat_ms, rms, rms_times = analyze_audio(temp_path)
+        bpm = analyze_bpm(temp_path)
 
-        original_audio = AudioSegment.from_file(temp_path)
-
-        if len(original_audio) < 15000:
-            st.error("Audio is too short. Please upload a longer song.")
-            st.stop()
-
-        total = len(original_audio)
-
-        drop_start = find_drop_point_ms(
-            total,
-            rms,
-            rms_times,
-            beat_ms
-        )
-
-        intro_target = int(drop_start * 0.42)
-
-        intro_end = nearest_beat_ms(
-            intro_target,
-            beat_ms
-        )
-
-        intro_end = max(
-            4500,
-            min(intro_end, int(total * 0.32))
-        )
-
-        drop_start = max(
-            intro_end + 7000,
-            drop_start
-        )
-
-        drop_start = min(
-            drop_start,
-            int(total * 0.82)
-        )
-
-        intro = original_audio[:intro_end]
-        build = original_audio[intro_end:drop_start]
-        original_drop_ref = original_audio[drop_start:]
-
-        command_info = parse_command(
+        vibe, intensity, target_bpm = parse_command(
             user_command
         )
 
-        target_bpm = command_info["target_bpm"]
+        if target_bpm is not None:
+            remix_bpm = target_bpm
+        else:
+            remix_bpm = bpm
 
-        intro_prompt = make_intro_prompt(
-            command_info
+        remix_bpm = max(
+            90,
+            min(remix_bpm,
+                180)
         )
 
-        drop_prompt = make_drop_prompt(
-            command_info
-        )
+        audio = AudioSegment.from_file(temp_path)
 
-        ai_success = False
-        ai_intro_layer = None
-        error_text = None
+        if len(audio) < 10000:
+            st.error("Audio is too short. Please upload a longer song.")
+            st.stop()
 
-        try:
-            status.write("Generating AI intro...")
+        total = len(audio)
 
-            intro_ai_path = generate_hf_music(
-                intro_prompt,
-                duration=8
-            )
+        intro_len = int(total * 0.30)
+        build_len = int(total * 0.30)
 
-            ai_intro_layer = AudioSegment.from_file(
-                intro_ai_path
-            )
+        intro = audio[:intro_len]
 
-            status.write("Generating AI speedcore drop...")
+        build = audio[
+            intro_len:intro_len + build_len
+        ]
 
-            drop_ai_path = generate_hf_music(
-                drop_prompt,
-                duration=12
-            )
-
-            ai_drop = AudioSegment.from_file(
-                drop_ai_path
-            )
-
-            ai_drop = process_ai_drop(
-                ai_drop,
-                target_bpm
-            )
-
-            ai_success = True
-
-        except Exception as e:
-            error_text = str(e)
-
-            st.warning("AI generation failed. Using fallback remix mode.")
-            st.caption(error_text)
-
-            ai_intro_layer = None
-
-            ai_drop = fallback_drop(
-                original_drop_ref,
-                target_bpm
-            )
-
-            ai_success = False
+        drop = audio[
+            intro_len + build_len:
+        ]
 
         intro = process_intro(
             intro,
-            ai_intro_layer,
-            bpm
+            remix_bpm,
+            vibe,
+            intensity
         )
 
         build = process_build(
             build,
-            bpm
+            remix_bpm,
+            vibe,
+            intensity
         )
 
-        pre_drop = AudioSegment.silent(
-            duration=240
+        pause = AudioSegment.silent(
+            duration=120
+        )
+
+        drop = process_drop(
+            drop,
+            remix_bpm,
+            vibe,
+            intensity
         )
 
         remix = intro.append(
             build,
-            crossfade=220
+            crossfade=250
         )
 
         remix = remix.append(
-            pre_drop,
+            pause,
             crossfade=5
         )
 
         remix = remix.append(
-            ai_drop,
-            crossfade=90
+            drop,
+            crossfade=120
         )
 
-        remix = remix.fade_out(1200)
+        remix = remix.fade_out(1000)
 
-        max_len = len(original_audio) + 4000
-
-        if len(remix) > max_len:
-            remix = remix[:max_len]
-
-        output_path = "pacoel_hf_ai_remix.mp3"
+        output_path = "pacoel_8bit_remix.mp3"
 
         remix.export(
             output_path,
@@ -782,24 +753,16 @@ if uploaded:
         with open(output_path, "rb") as f:
             st.session_state.remix_bytes = f.read()
 
-        st.session_state.remix_bpm = bpm
-        st.session_state.drop_bpm = target_bpm
-        st.session_state.ai_used = ai_success
-        st.session_state.error_text = error_text
+        st.session_state.remix_bpm = remix_bpm
+        st.session_state.remix_info = f"8-bit {vibe} / {intensity}"
 
     if st.session_state.remix_bytes:
-        st.write(f"Detected BPM: {st.session_state.remix_bpm}")
-        st.write(f"AI Target Drop BPM: {st.session_state.drop_bpm}")
+        st.write(f"Detected / Remix BPM: {st.session_state.remix_bpm}")
 
-        if st.session_state.ai_used:
-            st.success("Hugging Face MusicGen AI was used.")
-        else:
-            st.info("Fallback remix mode was used.")
+        if st.session_state.remix_info:
+            st.write(f"Style: {st.session_state.remix_info}")
 
-            if st.session_state.error_text:
-                st.caption(st.session_state.error_text)
-
-        st.success("Remix Complete!")
+        st.success("8-Bit Remix Complete!")
 
         st.audio(
             st.session_state.remix_bytes,
@@ -807,8 +770,8 @@ if uploaded:
         )
 
         st.download_button(
-            "⬇ Download Remix",
+            "⬇ Download 8-Bit Remix",
             st.session_state.remix_bytes,
-            file_name="pacoel_hf_ai_remix.mp3",
+            file_name="pacoel_8bit_remix.mp3",
             mime="audio/mpeg",
         )

@@ -27,8 +27,8 @@ st.markdown("""
 }
 
 .main-title {
-    font-size: 58px;
-    font-weight: 800;
+    font-size: 60px;
+    font-weight: 900;
     color: #111111;
 }
 
@@ -40,17 +40,17 @@ st.markdown("""
 
 .info-box {
     background: white;
-    padding: 20px;
+    padding: 22px;
     border-radius: 18px;
     margin-bottom: 25px;
-    box-shadow: 0px 4px 15px rgba(0,0,0,0.06);
+    box-shadow: 0px 4px 15px rgba(0,0,0,0.05);
 }
 
 .stButton button {
     background-color: black;
     color: white;
     border-radius: 16px;
-    height: 52px;
+    height: 54px;
     width: 100%;
     font-size: 18px;
     border: none;
@@ -60,7 +60,7 @@ st.markdown("""
     background-color: black;
     color: white;
     border-radius: 16px;
-    height: 52px;
+    height: 54px;
     width: 100%;
     font-size: 18px;
     border: none;
@@ -78,7 +78,7 @@ st.markdown(
 )
 
 st.markdown(
-    '<div class="sub-title">AI Adaptive Remix Engine</div>',
+    '<div class="sub-title">AI Speedcore Remix Engine</div>',
     unsafe_allow_html=True
 )
 
@@ -88,9 +88,9 @@ st.markdown(
 st.markdown("""
 <div class="info-box">
 
-AI analyzes your uploaded song and automatically creates
-a dynamic remix with adaptive speed, beat detection,
-drop enhancement, and intelligent drum layering.
+AI analyzes the uploaded track and automatically creates
+a progressive speedcore remix with intro preservation,
+build-up transitions, drop enhancement, and adaptive drums.
 
 </div>
 """, unsafe_allow_html=True)
@@ -110,9 +110,9 @@ snare = load_sound("sounds/snare.wav")
 hihat = load_sound("sounds/hihat.wav")
 
 # -------------------------
-# AI 드럼 함수
+# 드럼 함수
 # -------------------------
-def add_ai_drums(audio, beat_times, intensity=1):
+def add_drums(audio, beat_times, section="intro"):
 
     output = audio
 
@@ -120,29 +120,62 @@ def add_ai_drums(audio, beat_times, intensity=1):
 
         pos = int(beat * 1000)
 
-        # 킥
-        if kick and i % 2 == 0:
+        # -------------------------
+        # 인트로
+        # -------------------------
+        if section == "intro":
 
-            output = output.overlay(
-                kick - (2 - intensity),
-                position=pos
-            )
+            if hihat and i % 8 == 0:
 
-        # 하이햇
-        if hihat:
+                output = output.overlay(
+                    hihat - 18,
+                    position=pos
+                )
 
-            output = output.overlay(
-                hihat - 14,
-                position=pos + 90
-            )
+        # -------------------------
+        # 빌드업
+        # -------------------------
+        elif section == "build":
 
-        # 스네어
-        if snare and i % 4 == 2:
+            if kick and i % 4 == 0:
 
-            output = output.overlay(
-                snare - 5,
-                position=pos
-            )
+                output = output.overlay(
+                    kick - 5,
+                    position=pos
+                )
+
+            if hihat:
+
+                output = output.overlay(
+                    hihat - 14,
+                    position=pos + 60
+                )
+
+        # -------------------------
+        # 드랍
+        # -------------------------
+        elif section == "drop":
+
+            if kick:
+
+                output = output.overlay(
+                    kick + 1,
+                    position=pos
+                )
+
+            if snare and i % 2 == 0:
+
+                output = output.overlay(
+                    snare - 4,
+                    position=pos + 40
+                )
+
+            if hihat:
+
+                output = output.overlay(
+                    hihat - 10,
+                    position=pos + 20
+                )
 
     return output
 
@@ -161,48 +194,48 @@ if uploaded:
 
     st.audio(uploaded)
 
-    if st.button("Generate AI Remix"):
+    if st.button("Generate AI Speedcore Remix"):
 
         progress = st.progress(0)
 
         status = st.empty()
 
-        loading = [
-            "Analyzing Audio...",
-            "Detecting BPM...",
-            "Detecting Energy...",
-            "Finding Drops...",
-            "Generating Remix...",
-            "Adding AI Drums...",
-            "Finalizing..."
+        steps = [
+            "Analyzing BPM...",
+            "Detecting Beats...",
+            "Building Intro...",
+            "Generating Build-up...",
+            "Generating Drop...",
+            "Adding Drums...",
+            "Finalizing Remix..."
         ]
 
         for i in range(101):
 
-            time.sleep(0.025)
+            time.sleep(0.02)
 
             progress.progress(i)
 
-            if i < 10:
-                status.write(loading[0])
+            if i < 15:
+                status.write(steps[0])
 
-            elif i < 25:
-                status.write(loading[1])
+            elif i < 30:
+                status.write(steps[1])
 
-            elif i < 40:
-                status.write(loading[2])
+            elif i < 45:
+                status.write(steps[2])
 
-            elif i < 55:
-                status.write(loading[3])
+            elif i < 65:
+                status.write(steps[3])
 
-            elif i < 75:
-                status.write(loading[4])
+            elif i < 85:
+                status.write(steps[4])
 
-            elif i < 90:
-                status.write(loading[5])
+            elif i < 95:
+                status.write(steps[5])
 
             else:
-                status.write(loading[6])
+                status.write(steps[6])
 
         # -------------------------
         # 임시 저장
@@ -214,14 +247,13 @@ if uploaded:
             temp_path = tmp.name
 
         # -------------------------
-        # librosa 분석
+        # BPM 분석
         # -------------------------
         y, sr = librosa.load(
             temp_path,
             sr=None
         )
 
-        # BPM 분석
         tempo, beats = librosa.beat.beat_track(
             y=y,
             sr=sr
@@ -233,128 +265,121 @@ if uploaded:
         )
 
         # -------------------------
-        # 에너지 분석
-        # -------------------------
-        rms = librosa.feature.rms(y=y)[0]
-
-        energy = np.mean(rms)
-
-        # -------------------------
         # 오디오 로드
         # -------------------------
         audio = AudioSegment.from_file(temp_path)
 
-        length = len(audio)
+        total = len(audio)
 
         # -------------------------
         # 구간 분리
         # -------------------------
-        intro = audio[:length // 3]
+        intro_len = int(total * 0.20)
+        build_len = int(total * 0.35)
 
-        middle = audio[length // 3:length // 3 * 2]
+        intro = audio[:intro_len]
 
-        drop = audio[length // 3 * 2:]
+        build = audio[
+            intro_len:intro_len + build_len
+        ]
+
+        drop = audio[
+            intro_len + build_len:
+        ]
 
         # -------------------------
-        # AI 속도 계산
+        # 스피드코어 BPM 느낌
         # -------------------------
-        if tempo < 90:
+        if tempo < 100:
 
-            intro_speed = 1.03
-            middle_speed = 1.08
-            drop_speed = 1.15
+            build_speed = 1.25
+            drop_speed = 1.45
 
-        elif tempo < 130:
+        elif tempo < 140:
 
-            intro_speed = 1.02
-            middle_speed = 1.06
-            drop_speed = 1.10
+            build_speed = 1.18
+            drop_speed = 1.35
 
         else:
 
-            intro_speed = 1.00
-            middle_speed = 1.03
-            drop_speed = 1.06
+            build_speed = 1.10
+            drop_speed = 1.25
 
         # -------------------------
-        # 속도 적용
+        # 인트로
         # -------------------------
-        intro = speedup(
-            intro,
-            playback_speed=intro_speed
+        intro = intro.fade_in(500)
+
+        # -------------------------
+        # 빌드업
+        # -------------------------
+        build = speedup(
+            build,
+            playback_speed=build_speed
         )
 
-        middle = speedup(
-            middle,
-            playback_speed=middle_speed
-        )
+        build = build + 2
 
+        # -------------------------
+        # 드랍
+        # -------------------------
         drop = speedup(
             drop,
             playback_speed=drop_speed
         )
 
-        # -------------------------
-        # 드랍 강화
-        # -------------------------
-        if energy > 0.05:
-
-            drop = drop + 5
-
-        else:
-
-            drop = drop + 2
+        drop = drop + 7
 
         # -------------------------
-        # AI 드럼 추가
+        # 드럼 추가
         # -------------------------
-        intro = add_ai_drums(
+        intro = add_drums(
             intro,
             beat_times,
-            intensity=0
+            section="intro"
         )
 
-        middle = add_ai_drums(
-            middle,
+        build = add_drums(
+            build,
             beat_times,
-            intensity=1
+            section="build"
         )
 
-        drop = add_ai_drums(
+        drop = add_drums(
             drop,
             beat_times,
-            intensity=2
+            section="drop"
         )
 
         # -------------------------
-        # 합치기
+        # 연결
         # -------------------------
-        remixed = intro.append(
-            middle,
-            crossfade=250
+        remix = intro.append(
+            build,
+            crossfade=400
         )
 
-        remixed = remixed.append(
+        remix = remix.append(
             drop,
-            crossfade=350
+            crossfade=500
         )
 
         # -------------------------
-        # 최종 볼륨
+        # 마스터 볼륨
         # -------------------------
-        remixed = remixed + 1
+        remix = remix + 1
 
         # -------------------------
         # 저장
         # -------------------------
-        output_path = "ai_adaptive_remix.mp3"
+        output_path = "pacoel_speedcore_remix.mp3"
 
-        remixed.export(
+        remix.export(
             output_path,
             format="mp3"
         )
 
-        st.success("AI Remix Complete!")
+        st.success("AI Speedcore Remix Complete!")
 
         st.audio(output_path)
 
@@ -363,5 +388,5 @@ if uploaded:
             st.download_button(
                 "⬇ Download Remix",
                 f,
-                file_name="ai_adaptive_remix.mp3"
+                file_name="pacoel_speedcore_remix.mp3"
             )

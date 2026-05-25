@@ -4,3 +4,4 @@ numpy
 audioop-lts
 librosa
 soundfile
+scipy

@@ -7,7 +7,7 @@ import tempfile
 import time
 import os
 import requests
-import replicate
+from gradio_client import Client, handle_file
 
 # -------------------------
 # Page config
@@ -408,27 +408,23 @@ def export_segment(segment, suffix=".wav"):
 # -------------------------
 def generate_ai_audio(prompt, input_audio_path, duration=12, continuation=False):
     try:
-        with open(input_audio_path, "rb") as audio_file:
-            output = replicate.run(
-                "meta/musicgen:ed4031145f17b820ff6e17f78a174aaffb3e2080d629c8a4187bf4d7eb9c5f04",
-                input={
-                    "model_version": "stereo-melody-large",
-                    "prompt": prompt,
-                    "input_audio": audio_file,
-                    "duration": duration,
-                    "continuation": continuation,
-                    "output_format": "mp3",
-                    "temperature": 1.0,
-                    "classifier_free_guidance": 4,
-                    "top_k": 250,
-                    "top_p": 0
-                }
-            )
+        client = Client("facebook/MusicGen")
 
-        return output
+        result = client.predict(
+            text=prompt,
+            melody=handle_file(input_audio_path),
+            duration=duration,
+            topk=250,
+            topp=0,
+            temperature=1.0,
+            cfg_coef=4,
+            api_name="/predict_full"
+        )
+
+        return result
 
     except Exception as e:
-        raise RuntimeError(f"Replicate generation failed: {e}")
+        raise RuntimeError(f"Hugging Face MusicGen failed: {e}")
 
 
 # -------------------------

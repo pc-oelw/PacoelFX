@@ -121,19 +121,20 @@ st.markdown(
 )
 
 st.markdown(
-    '<div class="sub-title">Free Hugging Face Command AI Remix Engine</div>',
+    '<div class="sub-title">Free Command AI Remix Engine</div>',
     unsafe_allow_html=True
 )
 
 st.markdown("""
 <div class="info-box">
 
-Upload a song, write remix commands, and Pacoel Wave will use
-a free Hugging Face MusicGen Space to generate an intro layer
-and a new drop based on your original audio reference.
+Upload a song, write remix commands, and Pacoel Wave will try to use
+a free Hugging Face MusicGen Space to create an AI intro layer and drop.
+If the free AI server fails, it will automatically use fallback remix mode.
 
 </div>
 """, unsafe_allow_html=True)
+
 
 # -------------------------
 # Drum samples
@@ -155,6 +156,7 @@ hihat = load_sound("sounds/hihat.wav")
 @st.cache_resource
 def get_hf_client():
     return Client("https://facebook-musicgen.hf.space/")
+
 
 # -------------------------
 # Safe speedup
@@ -282,7 +284,7 @@ def find_drop_point_ms(total_ms, rms, rms_times, beat_ms):
 
 
 # -------------------------
-# Parse user command
+# Parse command
 # -------------------------
 def parse_command(user_command):
     command = user_command.lower() if user_command else ""
@@ -408,8 +410,7 @@ def generate_ai_audio(prompt, input_audio_path, duration=12):
     try:
         client = get_hf_client()
 
-        # facebook/MusicGen Space는 /predict_full이 안 먹는 경우가 있어서
-        # fn_index=0 방식으로 호출
+        # Try melody-based call with fn_index=0
         try:
             result = client.predict(
                 prompt,
@@ -419,7 +420,7 @@ def generate_ai_audio(prompt, input_audio_path, duration=12):
             return result
 
         except Exception as first_error:
-            # melody 입력이 안 먹으면 텍스트만으로 재시도
+            # Try text-only call
             try:
                 result = client.predict(
                     prompt,
@@ -438,13 +439,72 @@ def generate_ai_audio(prompt, input_audio_path, duration=12):
 
 
 # -------------------------
+# Extract generated audio path
+# -------------------------
+def download_ai_audio(output):
+    candidates = []
+
+    if isinstance(output, tuple) or isinstance(output, list):
+        candidates.extend(list(output))
+    else:
+        candidates.append(output)
+
+    for item in candidates:
+        if isinstance(item, str) and os.path.exists(item):
+            return item
+
+        if isinstance(item, dict):
+            if "path" in item and os.path.exists(item["path"]):
+                return item["path"]
+
+            if "name" in item and os.path.exists(item["name"]):
+                return item["name"]
+
+            if "url" in item:
+                url = item["url"]
+
+                temp_audio = tempfile.NamedTemporaryFile(
+                    delete=False,
+                    suffix=".wav"
+                )
+
+                response = requests.get(
+                    url,
+                    timeout=180
+                )
+
+                if response.status_code == 200:
+                    temp_audio.write(response.content)
+                    temp_audio.close()
+                    return temp_audio.name
+
+        if isinstance(item, str) and item.startswith("http"):
+            temp_audio = tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=".wav"
+            )
+
+            response = requests.get(
+                item,
+                timeout=180
+            )
+
+            if response.status_code == 200:
+                temp_audio.write(response.content)
+                temp_audio.close()
+                return temp_audio.name
+
+    raise RuntimeError(f"Unknown Hugging Face output format: {output}")
+
+
+# -------------------------
 # Intro processing
 # -------------------------
 def process_intro(original_intro, ai_intro_layer, bpm):
     intro = original_intro.fade_in(300)
     intro = high_pass_filter(intro, 35)
 
-    # AI layer를 초반에 깔아서 변화가 확실히 느껴지게 함
+    # AI layer를 초반에 깔아서 초반도 변하게 함
     if ai_intro_layer:
         ai_layer = ai_intro_layer[:len(intro)]
         ai_layer = ai_layer - 6
@@ -652,8 +712,8 @@ if uploaded:
             "Finding musical drop point...",
             "Reading remix command...",
             "Preparing original audio reference...",
-            "Generating AI intro layer on Hugging Face...",
-            "Generating AI melody-based drop on Hugging Face...",
+            "Generating AI intro layer...",
+            "Generating AI melody-based drop...",
             "Processing build-up...",
             "Blending remix sections...",
             "Finalizing remix..."

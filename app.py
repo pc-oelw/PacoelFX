@@ -5,6 +5,7 @@ import librosa
 import numpy as np
 import tempfile
 import time
+import random
 import os
 
 # -------------------------
@@ -27,7 +28,7 @@ st.markdown("""
 }
 
 .main-title {
-    font-size: 60px;
+    font-size: 62px;
     font-weight: 900;
     color: #111111;
 }
@@ -78,7 +79,7 @@ st.markdown(
 )
 
 st.markdown(
-    '<div class="sub-title">AI Speedcore Remix Engine</div>',
+    '<div class="sub-title">AI Chaos Speedcore Engine</div>',
     unsafe_allow_html=True
 )
 
@@ -88,9 +89,9 @@ st.markdown(
 st.markdown("""
 <div class="info-box">
 
-AI analyzes the uploaded track and automatically creates
-a progressive speedcore remix with intro preservation,
-build-up transitions, drop enhancement, and adaptive drums.
+AI analyzes the uploaded song and dynamically generates
+a chaotic speedcore-style remix with drops, BPM changes,
+breakdowns, glitch cuts, and adaptive drum layering.
 
 </div>
 """, unsafe_allow_html=True)
@@ -110,74 +111,95 @@ snare = load_sound("sounds/snare.wav")
 hihat = load_sound("sounds/hihat.wav")
 
 # -------------------------
-# 드럼 함수
+# 드럼 추가
 # -------------------------
-def add_drums(audio, beat_times, section="intro"):
+def add_chaos_drums(audio, intensity=1):
+
+    if not kick:
+        return audio
 
     output = audio
 
-    for i, beat in enumerate(beat_times):
+    interval = max(120, 320 - (intensity * 45))
 
-        pos = int(beat * 1000)
+    for pos in range(0, len(audio), interval):
 
-        # -------------------------
-        # 인트로
-        # -------------------------
-        if section == "intro":
+        # 킥
+        output = output.overlay(
+            kick - (2 - intensity),
+            position=pos
+        )
 
-            if hihat and i % 8 == 0:
+        # 하이햇
+        if hihat and random.random() > 0.2:
 
-                output = output.overlay(
-                    hihat - 18,
-                    position=pos
-                )
+            output = output.overlay(
+                hihat - 12,
+                position=pos + random.randint(10, 70)
+            )
 
-        # -------------------------
-        # 빌드업
-        # -------------------------
-        elif section == "build":
+        # 스네어
+        if snare and random.random() > 0.5:
 
-            if kick and i % 4 == 0:
-
-                output = output.overlay(
-                    kick - 5,
-                    position=pos
-                )
-
-            if hihat:
-
-                output = output.overlay(
-                    hihat - 14,
-                    position=pos + 60
-                )
-
-        # -------------------------
-        # 드랍
-        # -------------------------
-        elif section == "drop":
-
-            if kick:
-
-                output = output.overlay(
-                    kick + 1,
-                    position=pos
-                )
-
-            if snare and i % 2 == 0:
-
-                output = output.overlay(
-                    snare - 4,
-                    position=pos + 40
-                )
-
-            if hihat:
-
-                output = output.overlay(
-                    hihat - 10,
-                    position=pos + 20
-                )
+            output = output.overlay(
+                snare - 6,
+                position=pos + random.randint(60, 140)
+            )
 
     return output
+
+# -------------------------
+# 글리치 컷
+# -------------------------
+def glitch(audio):
+
+    chunks = []
+
+    cursor = 0
+
+    while cursor < len(audio):
+
+        chunk_size = random.randint(80, 240)
+
+        part = audio[cursor:cursor + chunk_size]
+
+        mode = random.randint(0, 6)
+
+        # 반복
+        if mode == 0:
+
+            chunks.append(part)
+            chunks.append(part)
+
+        # 리버스 느낌
+        elif mode == 1:
+
+            chunks.append(part.reverse())
+
+        # 스킵
+        elif mode == 2:
+
+            pass
+
+        # 정지 느낌
+        elif mode == 3:
+
+            chunks.append(AudioSegment.silent(duration=50))
+            chunks.append(part)
+
+        else:
+
+            chunks.append(part)
+
+        cursor += chunk_size
+
+    final = AudioSegment.empty()
+
+    for c in chunks:
+
+        final += c
+
+    return final
 
 # -------------------------
 # 업로드
@@ -194,7 +216,7 @@ if uploaded:
 
     st.audio(uploaded)
 
-    if st.button("Generate AI Speedcore Remix"):
+    if st.button("Generate AI Chaos Remix"):
 
         progress = st.progress(0)
 
@@ -202,12 +224,12 @@ if uploaded:
 
         steps = [
             "Analyzing BPM...",
-            "Detecting Beats...",
-            "Building Intro...",
+            "Detecting Energy...",
             "Generating Build-up...",
-            "Generating Drop...",
-            "Adding Drums...",
-            "Finalizing Remix..."
+            "Creating Drops...",
+            "Injecting Chaos...",
+            "Adding Speedcore Drums...",
+            "Finalizing..."
         ]
 
         for i in range(101):
@@ -259,10 +281,9 @@ if uploaded:
             sr=sr
         )
 
-        beat_times = librosa.frames_to_time(
-            beats,
-            sr=sr
-        )
+        rms = librosa.feature.rms(y=y)[0]
+
+        energy = np.mean(rms)
 
         # -------------------------
         # 오디오 로드
@@ -272,114 +293,146 @@ if uploaded:
         total = len(audio)
 
         # -------------------------
-        # 구간 분리
+        # 섹션 분리
         # -------------------------
-        intro_len = int(total * 0.20)
-        build_len = int(total * 0.35)
+        intro_len = int(total * 0.18)
+
+        buildup_len = int(total * 0.25)
+
+        fake_drop_len = int(total * 0.12)
 
         intro = audio[:intro_len]
 
-        build = audio[
-            intro_len:intro_len + build_len
+        buildup = audio[
+            intro_len:intro_len + buildup_len
+        ]
+
+        fake_drop = audio[
+            intro_len + buildup_len:
+            intro_len + buildup_len + fake_drop_len
         ]
 
         drop = audio[
-            intro_len + build_len:
+            intro_len + buildup_len + fake_drop_len:
         ]
 
         # -------------------------
-        # 스피드코어 BPM 느낌
+        # BPM 계산
         # -------------------------
         if tempo < 100:
 
-            build_speed = 1.25
-            drop_speed = 1.45
+            buildup_speed = 1.18
+            fake_speed = 1.45
+            drop_speed = 1.80
 
         elif tempo < 140:
 
-            build_speed = 1.18
-            drop_speed = 1.35
+            buildup_speed = 1.12
+            fake_speed = 1.35
+            drop_speed = 1.65
 
         else:
 
-            build_speed = 1.10
-            drop_speed = 1.25
+            buildup_speed = 1.08
+            fake_speed = 1.25
+            drop_speed = 1.50
 
         # -------------------------
         # 인트로
         # -------------------------
-        intro = intro.fade_in(500)
+        intro = intro.fade_in(1000)
 
         # -------------------------
         # 빌드업
         # -------------------------
-        build = speedup(
-            build,
-            playback_speed=build_speed
+        buildup = speedup(
+            buildup,
+            playback_speed=buildup_speed
         )
 
-        build = build + 2
+        buildup = buildup + 2
 
         # -------------------------
-        # 드랍
+        # 페이크 드랍
+        # -------------------------
+        fake_drop = speedup(
+            fake_drop,
+            playback_speed=fake_speed
+        )
+
+        fake_drop = glitch(fake_drop)
+
+        fake_drop = fake_drop + 4
+
+        # -------------------------
+        # 메인 드랍
         # -------------------------
         drop = speedup(
             drop,
             playback_speed=drop_speed
         )
 
-        drop = drop + 7
+        # 글리치
+        drop = glitch(drop)
 
-        # -------------------------
-        # 드럼 추가
-        # -------------------------
-        intro = add_drums(
-            intro,
-            beat_times,
-            section="intro"
-        )
-
-        build = add_drums(
-            build,
-            beat_times,
-            section="build"
-        )
-
-        drop = add_drums(
+        # 드럼
+        drop = add_chaos_drums(
             drop,
-            beat_times,
-            section="drop"
+            intensity=4
         )
 
+        # 볼륨
+        drop = drop + 8
+
         # -------------------------
-        # 연결
+        # 브레이크다운
+        # -------------------------
+        breakdown = AudioSegment.silent(duration=250)
+
+        # -------------------------
+        # 합치기
         # -------------------------
         remix = intro.append(
-            build,
-            crossfade=400
+            buildup,
+            crossfade=300
+        )
+
+        remix = remix.append(
+            breakdown,
+            crossfade=20
+        )
+
+        remix = remix.append(
+            fake_drop,
+            crossfade=120
+        )
+
+        remix = remix.append(
+            breakdown,
+            crossfade=10
         )
 
         remix = remix.append(
             drop,
-            crossfade=500
+            crossfade=180
         )
 
         # -------------------------
-        # 마스터 볼륨
+        # 마스터
         # -------------------------
         remix = remix + 1
 
         # -------------------------
         # 저장
         # -------------------------
-        output_path = "pacoel_speedcore_remix.mp3"
+        output_path = "pacoel_chaos_speedcore.mp3"
 
         remix.export(
             output_path,
             format="mp3"
         )
 
-        st.success("AI Speedcore Remix Complete!")
+        st.success("AI Chaos Remix Complete!")
 
         st.audio(output_path)
 
@@ -388,5 +441,5 @@ if uploaded:
             st.download_button(
                 "⬇ Download Remix",
                 f,
-                file_name="pacoel_speedcore_remix.mp3"
+                file_name="pacoel_chaos_speedcore.mp3"
             )

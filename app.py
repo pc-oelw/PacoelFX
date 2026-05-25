@@ -431,45 +431,58 @@ def generate_ai_audio(prompt, input_audio_path, duration=12, continuation=False)
 # Download generated audio
 # -------------------------
 def download_ai_audio(output):
-    temp_audio = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".mp3"
-    )
-
-    # FileOutput object
-    if hasattr(output, "read"):
-        temp_audio.write(output.read())
-        temp_audio.close()
-        return temp_audio.name
-
-    # List output
-    if isinstance(output, list):
-        first = output[0]
-
-        if hasattr(first, "read"):
-            temp_audio.write(first.read())
-            temp_audio.close()
-            return temp_audio.name
-
-        url = str(first)
-
+    # Gradio가 tuple/list로 결과를 주는 경우 처리
+    if isinstance(output, tuple) or isinstance(output, list):
+        possible_file = output[0]
     else:
-        url = str(output)
+        possible_file = output
 
-    response = requests.get(
-        url,
-        timeout=180
-    )
+    # 파일 경로가 바로 오는 경우
+    if isinstance(possible_file, str) and os.path.exists(possible_file):
+        return possible_file
 
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"Failed to download AI audio. Status code: {response.status_code}"
+    # URL이 오는 경우
+    if isinstance(possible_file, str) and possible_file.startswith("http"):
+        response = requests.get(
+            possible_file,
+            timeout=180
         )
 
-    temp_audio.write(response.content)
-    temp_audio.close()
+        if response.status_code != 200:
+            raise RuntimeError("Failed to download Hugging Face audio.")
 
-    return temp_audio.name
+        temp_audio = tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=".mp3"
+        )
+
+        temp_audio.write(response.content)
+        temp_audio.close()
+
+        return temp_audio.name
+
+    # dict 형태로 오는 경우
+    if isinstance(possible_file, dict):
+        if "path" in possible_file:
+            return possible_file["path"]
+
+        if "url" in possible_file:
+            response = requests.get(
+                possible_file["url"],
+                timeout=180
+            )
+
+            temp_audio = tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=".mp3"
+            )
+
+            temp_audio.write(response.content)
+            temp_audio.close()
+
+            return temp_audio.name
+
+    raise RuntimeError(f"Unknown Hugging Face output format: {output}")
 
 
 # -------------------------

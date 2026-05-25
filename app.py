@@ -7,23 +7,22 @@ import tempfile
 import time
 import os
 import requests
-from gradio_client import Client
 
-# -------------------------
-# Page config
-# -------------------------
 st.set_page_config(
     page_title="Pacoel Wave",
     page_icon="🎵",
     layout="wide"
 )
 
-# -------------------------
-# CSS
-# -------------------------
+try:
+    HF_TOKEN = st.secrets["HF_TOKEN"]
+    HF_READY = True
+except Exception:
+    HF_TOKEN = None
+    HF_READY = False
+
 st.markdown("""
 <style>
-
 html, body, [class*="css"] {
     color: #111111 !important;
 }
@@ -45,20 +44,10 @@ html, body, [class*="css"] {
     margin-bottom: 35px;
 }
 
-.info-box {
+.info-box, .command-box {
     background: #cfcfd4;
     color: #111111;
     padding: 22px;
-    border-radius: 18px;
-    margin-bottom: 25px;
-    box-shadow: 0px 4px 15px rgba(0,0,0,0.08);
-    border: 1px solid #b8b8bf;
-}
-
-.command-box {
-    background: #cfcfd4;
-    color: #111111;
-    padding: 20px;
     border-radius: 18px;
     margin-bottom: 25px;
     box-shadow: 0px 4px 15px rgba(0,0,0,0.08);
@@ -80,17 +69,7 @@ html, body, [class*="css"] {
     border: 1px solid #b8b8bf;
 }
 
-.stButton button {
-    background-color: #111111;
-    color: #ffffff;
-    border-radius: 16px;
-    height: 54px;
-    width: 100%;
-    font-size: 18px;
-    border: none;
-}
-
-.stDownloadButton button {
+.stButton button, .stDownloadButton button {
     background-color: #111111;
     color: #ffffff;
     border-radius: 16px;
@@ -108,37 +87,30 @@ div[data-testid="stAlert"] {
     background-color: #c7c7cc;
     color: #111111;
 }
-
 </style>
 """, unsafe_allow_html=True)
 
-# -------------------------
-# Header
-# -------------------------
 st.markdown(
     '<div class="main-title">🎵 Pacoel Wave</div>',
     unsafe_allow_html=True
 )
 
 st.markdown(
-    '<div class="sub-title">Free Command AI Remix Engine</div>',
+    '<div class="sub-title">Hugging Face AI Remix Engine</div>',
     unsafe_allow_html=True
 )
 
 st.markdown("""
 <div class="info-box">
 
-Upload a song, write remix commands, and Pacoel Wave will try to use
-a free Hugging Face MusicGen Space to create an AI intro layer and drop.
-If the free AI server fails, it will automatically use fallback remix mode.
+Upload a song, write remix commands, and Pacoel Wave will try to generate
+a new AI speedcore-style drop with Hugging Face. If AI generation fails,
+it will use fallback remix mode.
 
 </div>
 """, unsafe_allow_html=True)
 
 
-# -------------------------
-# Drum samples
-# -------------------------
 def load_sound(path):
     if os.path.exists(path):
         return AudioSegment.from_file(path)
@@ -150,17 +122,6 @@ snare = load_sound("sounds/snare.wav")
 hihat = load_sound("sounds/hihat.wav")
 
 
-# -------------------------
-# Hugging Face client
-# -------------------------
-@st.cache_resource
-def get_hf_client():
-    return Client("https://facebook-musicgen.hf.space/")
-
-
-# -------------------------
-# Safe speedup
-# -------------------------
 def safe_speedup(audio, playback_speed):
     if playback_speed <= 1.01:
         return audio
@@ -176,9 +137,6 @@ def safe_speedup(audio, playback_speed):
         return audio
 
 
-# -------------------------
-# Audio analysis
-# -------------------------
 def analyze_audio(file_path):
     y, sr = librosa.load(
         file_path,
@@ -219,9 +177,6 @@ def analyze_audio(file_path):
     return int(bpm), beat_ms, rms, rms_times
 
 
-# -------------------------
-# Nearest beat
-# -------------------------
 def nearest_beat_ms(target_ms, beat_ms):
     if not beat_ms:
         return target_ms
@@ -240,9 +195,6 @@ def nearest_beat_ms(target_ms, beat_ms):
     )
 
 
-# -------------------------
-# Drop point detection
-# -------------------------
 def find_drop_point_ms(total_ms, rms, rms_times, beat_ms):
     if len(rms) < 10:
         return int(total_ms * 0.62)
@@ -283,9 +235,6 @@ def find_drop_point_ms(total_ms, rms, rms_times, beat_ms):
     return drop_ms
 
 
-# -------------------------
-# Parse command
-# -------------------------
 def parse_command(user_command):
     command = user_command.lower() if user_command else ""
 
@@ -350,15 +299,11 @@ def parse_command(user_command):
     }
 
 
-# -------------------------
-# Prompt builders
-# -------------------------
 def make_intro_prompt(command_info):
     prompt = (
         f"{command_info['intro_type']}, "
-        "short remix intro layer, energetic rhythm game electronic style, "
-        "bright synths, chopped melodic texture, instrumental, no vocals, "
-        "designed to layer under the original song, clean mix"
+        "short remix intro, energetic rhythm game electronic music, "
+        "bright synths, chopped melody, instrumental, no vocals, clean mix"
     )
 
     if command_info["raw"]:
@@ -374,8 +319,7 @@ def make_drop_prompt(command_info):
         f"chaotic J-core speedcore drop, {target_bpm} BPM, "
         f"{command_info['drop_type']}, {command_info['kick_type']}, "
         "rapid drum fills, bright arcade synth leads, rhythm game boss song energy, "
-        "hyper energetic electronic drop, intense but clean mix, instrumental, no vocals, "
-        "melody should follow the input audio"
+        "hyper energetic electronic drop, intense but clean mix, instrumental, no vocals"
     )
 
     if command_info["raw"]:
@@ -384,126 +328,73 @@ def make_drop_prompt(command_info):
     return prompt
 
 
-# -------------------------
-# Export segment to temp file
-# -------------------------
-def export_segment(segment, suffix=".wav"):
-    temp_file = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=suffix
-    )
+def generate_hf_music(prompt, duration=10):
+    if not HF_READY:
+        raise RuntimeError("HF_TOKEN is missing in Streamlit Secrets.")
 
-    segment.export(
-        temp_file.name,
-        format=suffix.replace(".", "")
-    )
+    api_urls = [
+        "https://api-inference.huggingface.co/models/facebook/musicgen-small",
+        "https://api-inference.huggingface.co/models/facebook/musicgen-stereo-small"
+    ]
 
-    temp_file.close()
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Accept": "audio/wav"
+    }
 
-    return temp_file.name
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "max_new_tokens": 256,
+            "do_sample": True,
+            "temperature": 1.0
+        },
+        "options": {
+            "wait_for_model": True
+        }
+    }
 
+    last_error = None
 
-# -------------------------
-# Hugging Face MusicGen call
-# -------------------------
-def generate_ai_audio(prompt, input_audio_path, duration=12):
-    try:
-        client = get_hf_client()
-
-        # 구버전 gradio_client에서는 handle_file을 쓰지 않고 파일 경로를 그대로 넘김
+    for api_url in api_urls:
         try:
-            result = client.predict(
-                prompt,
-                input_audio_path,
-                fn_index=0
+            response = requests.post(
+                api_url,
+                headers=headers,
+                json=payload,
+                timeout=240
             )
-            return result
 
-        except Exception as first_error:
-            try:
-                result = client.predict(
-                    prompt,
-                    None,
-                    fn_index=0
-                )
-                return result
+            content_type = response.headers.get("content-type", "")
 
-            except Exception as second_error:
-                raise RuntimeError(
-                    f"MusicGen API failed. First error: {first_error} | Second error: {second_error}"
-                )
-
-    except Exception as e:
-        raise RuntimeError(f"Hugging Face MusicGen failed: {e}")
-
-
-# -------------------------
-# Extract generated audio path
-# -------------------------
-def download_ai_audio(output):
-    candidates = []
-
-    if isinstance(output, tuple) or isinstance(output, list):
-        candidates.extend(list(output))
-    else:
-        candidates.append(output)
-
-    for item in candidates:
-        if isinstance(item, str) and os.path.exists(item):
-            return item
-
-        if isinstance(item, dict):
-            if "path" in item and os.path.exists(item["path"]):
-                return item["path"]
-
-            if "name" in item and os.path.exists(item["name"]):
-                return item["name"]
-
-            if "url" in item:
-                url = item["url"]
-
+            if response.status_code == 200 and (
+                "audio" in content_type or len(response.content) > 10000
+            ):
                 temp_audio = tempfile.NamedTemporaryFile(
                     delete=False,
                     suffix=".wav"
                 )
 
-                response = requests.get(
-                    url,
-                    timeout=180
-                )
-
-                if response.status_code == 200:
-                    temp_audio.write(response.content)
-                    temp_audio.close()
-                    return temp_audio.name
-
-        if isinstance(item, str) and item.startswith("http"):
-            temp_audio = tempfile.NamedTemporaryFile(
-                delete=False,
-                suffix=".wav"
-            )
-
-            response = requests.get(
-                item,
-                timeout=180
-            )
-
-            if response.status_code == 200:
                 temp_audio.write(response.content)
                 temp_audio.close()
+
                 return temp_audio.name
 
-    raise RuntimeError(f"Unknown Hugging Face output format: {output}")
+            last_error = (
+                f"{api_url} failed: status={response.status_code}, "
+                f"content-type={content_type}, text={response.text[:500]}"
+            )
+
+        except Exception as e:
+            last_error = str(e)
+
+    raise RuntimeError(last_error or "Hugging Face music generation failed.")
 
 
-# -------------------------
-# Intro processing
-# -------------------------
 def process_intro(original_intro, ai_intro_layer, bpm):
     intro = original_intro.fade_in(300)
     intro = high_pass_filter(intro, 35)
 
-    # AI layer를 초반에 깔아서 초반도 변하게 함
     if ai_intro_layer:
         ai_layer = ai_intro_layer[:len(intro)]
         ai_layer = ai_layer - 6
@@ -534,9 +425,6 @@ def process_intro(original_intro, ai_intro_layer, bpm):
     return intro
 
 
-# -------------------------
-# Build-up processing
-# -------------------------
 def process_build(build, bpm):
     if len(build) < 4000:
         return build
@@ -584,9 +472,6 @@ def process_build(build, bpm):
     return result
 
 
-# -------------------------
-# AI drop processing
-# -------------------------
 def process_ai_drop(ai_drop, target_bpm):
     drop = ai_drop + 2
 
@@ -629,9 +514,6 @@ def process_ai_drop(ai_drop, target_bpm):
     return drop
 
 
-# -------------------------
-# Fallback drop
-# -------------------------
 def fallback_drop(source_audio, target_bpm):
     drop = safe_speedup(
         source_audio,
@@ -644,9 +526,6 @@ def fallback_drop(source_audio, target_bpm):
     )
 
 
-# -------------------------
-# Session state
-# -------------------------
 if "remix_bytes" not in st.session_state:
     st.session_state.remix_bytes = None
 
@@ -666,9 +545,6 @@ if "error_text" not in st.session_state:
     st.session_state.error_text = None
 
 
-# -------------------------
-# UI
-# -------------------------
 uploaded = st.file_uploader(
     "Upload Audio",
     type=["mp3", "wav"]
@@ -701,7 +577,10 @@ if uploaded:
 
     st.audio(uploaded)
 
-    if st.button("Generate Free AI Remix"):
+    if not HF_READY:
+        st.warning("HF_TOKEN이 Streamlit Secrets에 없어. AI 생성은 fallback으로만 작동해.")
+
+    if st.button("Generate AI Remix"):
         progress = st.progress(0)
         status = st.empty()
 
@@ -710,9 +589,8 @@ if uploaded:
             "Analyzing BPM and energy...",
             "Finding musical drop point...",
             "Reading remix command...",
-            "Preparing original audio reference...",
-            "Generating AI intro layer...",
-            "Generating AI melody-based drop...",
+            "Generating AI intro...",
+            "Generating AI speedcore drop...",
             "Processing build-up...",
             "Blending remix sections...",
             "Finalizing remix..."
@@ -728,20 +606,18 @@ if uploaded:
                 status.write(steps[1])
             elif i < 28:
                 status.write(steps[2])
-            elif i < 36:
+            elif i < 38:
                 status.write(steps[3])
-            elif i < 44:
+            elif i < 55:
                 status.write(steps[4])
-            elif i < 58:
+            elif i < 75:
                 status.write(steps[5])
-            elif i < 76:
-                status.write(steps[6])
             elif i < 86:
-                status.write(steps[7])
+                status.write(steps[6])
             elif i < 96:
-                status.write(steps[8])
+                status.write(steps[7])
             else:
-                status.write(steps[9])
+                status.write(steps[8])
 
         file_ext = os.path.splitext(uploaded.name)[1]
 
@@ -810,61 +686,27 @@ if uploaded:
             command_info
         )
 
-        intro_ref = original_audio[:min(len(original_audio), 9000)]
-
-        build_ref_start = max(
-            0,
-            drop_start - 12000
-        )
-
-        build_ref = original_audio[
-            build_ref_start:drop_start
-        ]
-
-        if len(build_ref) < 4000:
-            build_ref = original_audio[:min(len(original_audio), 12000)]
-
-        intro_ref_path = export_segment(
-            intro_ref,
-            suffix=".wav"
-        )
-
-        build_ref_path = export_segment(
-            build_ref,
-            suffix=".wav"
-        )
-
         ai_success = False
         ai_intro_layer = None
         error_text = None
 
         try:
-            status.write("Generating AI intro layer from your song...")
+            status.write("Generating AI intro...")
 
-            intro_output = generate_ai_audio(
+            intro_ai_path = generate_hf_music(
                 intro_prompt,
-                intro_ref_path,
                 duration=8
-            )
-
-            intro_ai_path = download_ai_audio(
-                intro_output
             )
 
             ai_intro_layer = AudioSegment.from_file(
                 intro_ai_path
             )
 
-            status.write("Generating melody-based AI speedcore drop...")
+            status.write("Generating AI speedcore drop...")
 
-            drop_output = generate_ai_audio(
+            drop_ai_path = generate_hf_music(
                 drop_prompt,
-                build_ref_path,
-                duration=15
-            )
-
-            drop_ai_path = download_ai_audio(
-                drop_output
+                duration=12
             )
 
             ai_drop = AudioSegment.from_file(
@@ -930,7 +772,7 @@ if uploaded:
         if len(remix) > max_len:
             remix = remix[:max_len]
 
-        output_path = "pacoel_free_ai_remix.mp3"
+        output_path = "pacoel_hf_ai_remix.mp3"
 
         remix.export(
             output_path,
@@ -950,7 +792,7 @@ if uploaded:
         st.write(f"AI Target Drop BPM: {st.session_state.drop_bpm}")
 
         if st.session_state.ai_used:
-            st.success("Free Hugging Face MusicGen was used.")
+            st.success("Hugging Face MusicGen AI was used.")
         else:
             st.info("Fallback remix mode was used.")
 
@@ -967,6 +809,6 @@ if uploaded:
         st.download_button(
             "⬇ Download Remix",
             st.session_state.remix_bytes,
-            file_name="pacoel_free_ai_remix.mp3",
+            file_name="pacoel_hf_ai_remix.mp3",
             mime="audio/mpeg",
         )

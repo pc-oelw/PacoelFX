@@ -156,7 +156,6 @@ hihat = load_sound("sounds/hihat.wav")
 def get_hf_client():
     return Client("https://facebook-musicgen.hf.space/")
 
-
 # -------------------------
 # Safe speedup
 # -------------------------
@@ -409,19 +408,8 @@ def generate_ai_audio(prompt, input_audio_path, duration=12):
     try:
         client = get_hf_client()
 
-        api_info = client.view_api()
-        raise RuntimeError(f"Available API info: {api_info}")
-
-    except Exception as e:
-        raise RuntimeError(f"Hugging Face MusicGen failed: {e}")
-# -------------------------
-# Extract generated audio path
-# -------------------------
-def generate_ai_audio(prompt, input_audio_path, duration=12):
-    try:
-        client = get_hf_client()
-
-        # 1차 시도: melody 입력 포함
+        # facebook/MusicGen Space는 /predict_full이 안 먹는 경우가 있어서
+        # fn_index=0 방식으로 호출
         try:
             result = client.predict(
                 prompt,
@@ -430,41 +418,20 @@ def generate_ai_audio(prompt, input_audio_path, duration=12):
             )
             return result
 
-        except Exception:
-            pass
+        except Exception as first_error:
+            # melody 입력이 안 먹으면 텍스트만으로 재시도
+            try:
+                result = client.predict(
+                    prompt,
+                    None,
+                    fn_index=0
+                )
+                return result
 
-        # 2차 시도: melody 없이 텍스트만
-        try:
-            result = client.predict(
-                prompt,
-                None,
-                fn_index=0
-            )
-            return result
-
-        except Exception:
-            pass
-
-        # 3차 시도: api_name="/predict"
-        try:
-            result = client.predict(
-                prompt,
-                handle_file(input_audio_path),
-                api_name="/predict"
-            )
-            return result
-
-        except Exception:
-            pass
-
-        # 4차 시도: 텍스트만 /predict
-        result = client.predict(
-            prompt,
-            None,
-            api_name="/predict"
-        )
-
-        return result
+            except Exception as second_error:
+                raise RuntimeError(
+                    f"MusicGen API failed. First error: {first_error} | Second error: {second_error}"
+                )
 
     except Exception as e:
         raise RuntimeError(f"Hugging Face MusicGen failed: {e}")
